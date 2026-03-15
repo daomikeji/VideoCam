@@ -1,0 +1,246 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="源文件">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="头文件">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="资源文件">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="framework.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="VirtualCamFilter.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\amextra.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\amfilter.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\cache.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\checkbmi.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\combase.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\cprop.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\ctlutil.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\ddmm.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\dllsetup.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\dxmperf.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\fourcc.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\measure.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\msgthrd.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\mtype.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\outputq.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\perflog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\perfstruct.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\pstream.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\pullpin.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\refclock.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\reftime.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\renbase.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\schedule.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\seekpt.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\source.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\streams.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\strmctl.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\sysclock.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\transfrm.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\transip.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\videoctl.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\vtrans.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\winctrl.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\winutil.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\wxdebug.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\wxlist.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="baseclasses\DirectShow-BaseClasses\baseclasses\wxutil.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dllmain.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="VirtualCamFilterImpl.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="VirtualCamRegister.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\amextra.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\amfilter.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\amvideo.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\arithutil.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\combase.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\cprop.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\ctlutil.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\ddmm.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\dllentry.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\dllsetup.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\mtype.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\outputq.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\perflog.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\pstream.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\pullpin.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\refclock.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\renbase.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\schedule.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\seekpt.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\source.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\strmctl.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\sysclock.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\transfrm.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\transip.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\videoctl.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\vtrans.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\winctrl.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\winutil.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\wxdebug.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\wxlist.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="baseclasses\DirectShow-BaseClasses\baseclasses\wxutil.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
