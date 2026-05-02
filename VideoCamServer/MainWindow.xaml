@@ -17,23 +17,29 @@
 
         <!-- 左侧: 视频预览区 (模拟) -->
         <Border Grid.Column="0" Background="#1c1c1e" Padding="20">
-            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                <!-- 
-                    在实际应用中，这里将是高性能的视频渲染控件，例如 Image 配合 WriteableBitmap，
-                    或者用于 DirectShow/Media Foundation 渲染的自定义组件。
-                -->
-                <TextBlock x:Name="VideoStatusText" 
-                           Text="等待服务器启动..." 
-                           Foreground="#E0E0E0" FontSize="32" 
-                           FontWeight="Bold" 
-                           HorizontalAlignment="Center" 
-                           Margin="0,0,0,10"/>
-                <Rectangle Width="640" Height="360" Fill="#2C2C2E" RadiusX="10" RadiusY="10" Opacity="0.9">
-                    <Rectangle.Effect>
-                        <DropShadowEffect ShadowDepth="0" Color="Black" Opacity="0.5" BlurRadius="15"/>
-                    </Rectangle.Effect>
-                </Rectangle>
-            </StackPanel>
+            <Grid>
+                <Border Background="#2C2C2E" CornerRadius="10">
+                    <Grid>
+                        <Image x:Name="VideoPreviewImage"
+                               Stretch="Uniform"
+                               SnapsToDevicePixels="True"
+                               RenderOptions.BitmapScalingMode="LowQuality"/>
+
+                        <Border VerticalAlignment="Top"
+                                HorizontalAlignment="Left"
+                                Margin="16"
+                                Padding="10,6"
+                                Background="#88000000"
+                                CornerRadius="6">
+                            <TextBlock x:Name="VideoStatusText"
+                                       Text="等待服务器启动..."
+                                       Foreground="#E0E0E0"
+                                       FontSize="20"
+                                       FontWeight="Bold"/>
+                        </Border>
+                    </Grid>
+                </Border>
+            </Grid>
         </Border>
 
         <!-- 右侧: 控制面板和状态区 -->

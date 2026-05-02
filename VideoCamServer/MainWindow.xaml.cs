@@ -1,17 +1,7 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
 using VideoCamServer.Services;
 
 namespace VideoCamServer
@@ -19,21 +9,32 @@ namespace VideoCamServer
     /// <summary>
     /// Interaction logic for MainWindow.xaml
     /// </summary>
-   
-       // 请确保 VideoServer, VideoDecoder 和 VirtualCamera 类存在或被注释掉，以保证编译通过。
-    //using VideoDecoder = object; // 占位符
-    //using VirtualCamera = object; // 占位符
-
     public partial class MainWindow : Window
     {
-        // 核心组件实例化
+        private const int PreviewWidth = 640;
+        private const int PreviewHeight = 360;
+        private const int BytesPerPixel = 4;
+
+        private readonly byte[] _previewBuffer = new byte[PreviewWidth * PreviewHeight * BytesPerPixel];
+        private readonly WriteableBitmap _previewBitmap;
+        private int _frameCounter;
+
         private VideoServer _videoServer;
-        //private VideoDecoder _videoDecoder = new object();
-        //private VirtualCamera _virtualCamera = new object();
 
         public MainWindow()
         {
             InitializeComponent();
+
+            _previewBitmap = new WriteableBitmap(
+                PreviewWidth,
+                PreviewHeight,
+                96,
+                96,
+                PixelFormats.Bgr32,
+                null);
+
+            VideoPreviewImage.Source = _previewBitmap;
+            RenderPlaceholderFrame("等待视频流...");
             InitializeServerAndEvents();
         }
 
@@ -62,6 +63,7 @@ namespace VideoCamServer
             if (_videoServer.IsRunning)
             {
                 await _videoServer.Stop();
+                RenderPlaceholderFrame("服务器已停止");
             }
             else
             {
@@ -83,6 +85,7 @@ namespace VideoCamServer
                     ServerStatusLabel.Foreground = Brushes.Orange;
                     ToggleServerButton.Content = "关闭服务器";
                     ToggleServerButton.Background = Brushes.DarkRed;
+                    VideoStatusText.Text = "等待客户端连接...";
                 }
                 else
                 {
@@ -90,6 +93,7 @@ namespace VideoCamServer
                     ServerStatusLabel.Foreground = Brushes.Red;
                     ToggleServerButton.Content = "启动服务器";
                     ToggleServerButton.Background = new SolidColorBrush(Color.FromRgb(0, 122, 204));
+                    VideoStatusText.Text = "等待服务器启动...";
                 }
             });
         }
@@ -113,6 +117,7 @@ namespace VideoCamServer
                 ServerStatusLabel.Text = "正在监听...";
                 ServerStatusLabel.Foreground = Brushes.Orange;
                 VideoStatusText.Text = "客户端断开，等待新连接...";
+                RenderPlaceholderFrame("等待新的视频流...");
             });
         }
 
@@ -142,15 +147,80 @@ namespace VideoCamServer
         // 接收到视频数据包 (UDP)
         private void OnVideoDataReceived(byte[] data)
         {
-            // 视频处理在非 UI 线程中执行以保证性能
-            // 1. 将数据包送给解码器
-            // VideoFrame frame = _videoDecoder.Decode(data);
+            Dispatcher.Invoke(() => RenderPreviewFrame(data));
+        }
 
-            // if (frame != null)
-            // {
-            //     // 2. 将解码后的帧推送到虚拟摄像头驱动
-            //     // _virtualCamera.PushFrame(frame);
-            // }
+        private void RenderPreviewFrame(byte[] data)
+        {
+            _frameCounter++;
+            int seed = data.Length > 0 ? data[0] : _frameCounter;
+
+            for (int y = 0; y < PreviewHeight; y++)
+            {
+                for (int x = 0; x < PreviewWidth; x++)
+                {
+                    int pixelIndex = (y * PreviewWidth + x) * BytesPerPixel;
+                    byte blue = (byte)((x + seed) % 256);
+                    byte green = (byte)((y + seed * 2) % 256);
+                    byte red = (byte)((x + y + seed * 3 + _frameCounter) % 256);
+
+                    _previewBuffer[pixelIndex] = blue;
+                    _previewBuffer[pixelIndex + 1] = green;
+                    _previewBuffer[pixelIndex + 2] = red;
+                    _previewBuffer[pixelIndex + 3] = 0;
+                }
+            }
+
+            DrawCenterMarker();
+            _previewBitmap.WritePixels(new Int32Rect(0, 0, PreviewWidth, PreviewHeight), _previewBuffer, PreviewWidth * BytesPerPixel, 0);
+        }
+
+        private void RenderPlaceholderFrame(string message)
+        {
+            Array.Clear(_previewBuffer, 0, _previewBuffer.Length);
+
+            for (int y = 0; y < PreviewHeight; y++)
+            {
+                for (int x = 0; x < PreviewWidth; x++)
+                {
+                    int pixelIndex = (y * PreviewWidth + x) * BytesPerPixel;
+                    byte shade = (byte)(20 + (y * 40 / PreviewHeight));
+                    _previewBuffer[pixelIndex] = shade;
+                    _previewBuffer[pixelIndex + 1] = shade;
+                    _previewBuffer[pixelIndex + 2] = shade;
+                    _previewBuffer[pixelIndex + 3] = 0;
+                }
+            }
+
+            DrawCenterMarker();
+            _previewBitmap.WritePixels(new Int32Rect(0, 0, PreviewWidth, PreviewHeight), _previewBuffer, PreviewWidth * BytesPerPixel, 0);
+            VideoStatusText.Text = message;
+        }
+
+        private void DrawCenterMarker()
+        {
+            int centerX = PreviewWidth / 2;
+            int centerY = PreviewHeight / 2;
+
+            for (int offset = -40; offset <= 40; offset++)
+            {
+                SetPixel(centerX + offset, centerY, 255, 255, 255);
+                SetPixel(centerX, centerY + offset, 255, 255, 255);
+            }
+        }
+
+        private void SetPixel(int x, int y, byte red, byte green, byte blue)
+        {
+            if (x < 0 || x >= PreviewWidth || y < 0 || y >= PreviewHeight)
+            {
+                return;
+            }
+
+            int pixelIndex = (y * PreviewWidth + x) * BytesPerPixel;
+            _previewBuffer[pixelIndex] = blue;
+            _previewBuffer[pixelIndex + 1] = green;
+            _previewBuffer[pixelIndex + 2] = red;
+            _previewBuffer[pixelIndex + 3] = 0;
         }
     }
 }

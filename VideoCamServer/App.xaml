@@ -1,8 +1,7 @@
 ﻿<Application x:Class="VideoCamServer.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:VideoCamServer"
-             StartupUri="MainWindow.xaml">
+             xmlns:local="clr-namespace:VideoCamServer">
     <Application.Resources>
          
     </Application.Resources>

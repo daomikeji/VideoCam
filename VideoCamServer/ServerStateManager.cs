@@ -89,13 +89,11 @@ namespace VideoCamServer
 
         private IntPtr _ffmpegDecoderContext = IntPtr.Zero;
         private VirtualCamera _virtualCamera;
+        private readonly object _cameraLock = new object();
 
         public VideoProcessor()
         {
             InitializeDecoder();
-
-            // Initialize the virtual camera with the same resolution and a default FPS of 30
-            _virtualCamera = new VirtualCamera(VideoWidth, VideoHeight, 30);
         }
 
         private void InitializeDecoder()
@@ -103,6 +101,21 @@ namespace VideoCamServer
             Console.WriteLine("[Decoder] 正在初始化 H.264 解码器...");
             _ffmpegDecoderContext = new IntPtr(1);
             Console.WriteLine("[Decoder] 解码器初始化完成。");
+        }
+
+        private void EnsureVirtualCameraInitialized()
+        {
+            if (_virtualCamera == null)
+            {
+                lock (_cameraLock)
+                {
+                    if (_virtualCamera == null)
+                    {
+                        // Initialize the virtual camera with the same resolution and a default FPS of 30
+                        _virtualCamera = new VirtualCamera(VideoWidth, VideoHeight, 30);
+                    }
+                }
+            }
         }
 
         public void ProcessUdpPacket(byte[] data)
@@ -114,12 +127,30 @@ namespace VideoCamServer
                 // 模拟解码逻辑：每收到 50 个 UDP 包后，就产生一个解码帧
                 if (data.Length > 100 && data[5] % 50 == 0)
                 {
-                    // 假设这是解码后得到的 RGB/YUV 帧
-                    byte[] decodedFrame = new byte[VideoWidth * VideoHeight * 2];
+                    // 假设这是解码后得到的帧数据
+                    // 在实际应用中，这里应该是 H.264 解码器的输出
+                    
+                    byte[] decodedFrame;
+                    
+                    // 示例：如果解码器输出的是 NV12 格式，需要转换为 BGRA
+                    // byte[] nv12Frame = DecodeH264ToNV12(data);
+                    // decodedFrame = VideoFormatConverter.ConvertNV12ToBGRA(nv12Frame, VideoWidth, VideoHeight);
+                    
+                    // 示例：如果解码器输出的是 I420 格式
+                    // byte[] i420Frame = DecodeH264ToI420(data);
+                    // decodedFrame = VideoFormatConverter.ConvertI420ToBGRA(i420Frame, VideoWidth, VideoHeight);
+                    
+                    // 目前使用模拟数据（BGRA 格式）
+                    decodedFrame = new byte[VideoWidth * VideoHeight * 4]; // BGRA format: 4 bytes per pixel
+                    
+                    // 触发帧就绪事件（用于 UI 预览等）
                     FrameReady?.Invoke(decodedFrame, VideoWidth, VideoHeight);
 
+                    // Ensure virtual camera is initialized before pushing frame
+                    EnsureVirtualCameraInitialized();
+                    
                     // Push the frame to the virtual camera
-                    _virtualCamera.PushFrame(decodedFrame);
+                    _virtualCamera?.PushFrame(decodedFrame);
                 }
             }
             catch (Exception ex)
@@ -354,13 +385,14 @@ namespace VideoCamServer
 
 
     // =================================================================================
-    // 5. 程序入口与 UI 模拟 (Program)
+    // 5. 程序入口与 UI 模拟 (Program) - 仅用于测试/示例
     // =================================================================================
 
     /// <summary>
-    /// 示例程序入口，模拟 WPF 应用程序的启动和关闭。
+    /// 示例程序入口（已废弃 - 仅供参考）
+    /// 实际应用使用 App.xaml.cs 作为启动点
     /// </summary>
-    public class Program
+    public class Program_Example_DO_NOT_USE
     {
         // C++ 驱动互操作的存根
         private static class DriverInterop
@@ -371,7 +403,9 @@ namespace VideoCamServer
             public static extern void PushNewFrame(IntPtr pFrameData, int width, int height);
         }
 
-        public static void Main(string[] args)
+        // 注意：此方法已不再使用，实际启动在 App.xaml.cs 中
+        // [STAThread]
+        public static void Main_Example(string[] args)
         {
             // 1. 初始化状态管理器 (WPF 的 ViewModel 实例)
             var stateManager = new ServerStateManager();
@@ -413,16 +447,15 @@ namespace VideoCamServer
             // 4. 模拟 WPF 窗口启动后的状态显示
             DisplayInitialUiState();
 
-            // 模拟 WPF 应用程序等待关闭
-            Console.WriteLine("\n服务器已启动。请在移动端连接测试。\n按任意键模拟关闭 WPF 应用程序...");
-            Console.ReadKey();
+            // 注意：不能在 WinExe 应用中使用 Console.ReadKey()
+            // Console.ReadKey();
 
-            // 5. 模拟 WPF 窗口关闭时的清理
-            Console.WriteLine("\n[WPF Shutdown] 正在停止所有服务...");
+            // 5. 清理
+            Console.WriteLine("\n[程序退出] 正在停止所有服务...");
             listener.StopListeners();
             discoveryService.StopBroadcast();
             videoProcessor.Shutdown();
-            Console.WriteLine("[WPF Shutdown] 程序退出。");
+            Console.WriteLine("[程序退出] 程序退出。");
         }
 
         private static void DisplayInitialUiState()
