@@ -189,6 +189,9 @@ namespace VideoCamServer
             _tcpPort = tcpPort;
             _udpPort = udpPort;
             _cancellationTokenSource = new CancellationTokenSource();
+            
+            // 恢复使用系统随机分配的源端口
+            // 因为部分路由器或手机系统会直接丢弃 "源端口 == 目标端口" 的 UDP 广播包
             _udpClient = new UdpClient();
             _udpClient.EnableBroadcast = true;
         }
@@ -205,13 +208,40 @@ namespace VideoCamServer
             string messageTemplate = $"VCAM|{_tcpPort}|{_udpPort}";
             byte[] messageBytes = Encoding.ASCII.GetBytes(messageTemplate);
 
-            IPEndPoint broadcastEndpoint = new IPEndPoint(IPAddress.Broadcast, DiscoveryPort);
-
             while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    await _udpClient.SendAsync(messageBytes, messageBytes.Length, broadcastEndpoint);
+                    // 1. 获取所有的网络接口
+                    var networkInterfaces = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
+                    foreach (var networkInterface in networkInterfaces)
+                    {
+                        // 过滤掉未开启的接口和环回接口
+                        if (networkInterface.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up ||
+                            networkInterface.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                        {
+                            continue;
+                        }
+
+                        // 找到所有的 IPv4 的 IP
+                        foreach (var ipInfo in networkInterface.GetIPProperties().UnicastAddresses)
+                        {
+                            if (ipInfo.Address.AddressFamily == AddressFamily.InterNetwork)
+                            {
+                                // 计算针对该子网的定向广播地址
+                                IPAddress broadcastAddress = GetBroadcastAddress(ipInfo.Address, ipInfo.IPv4Mask);
+                                if (broadcastAddress != null)
+                                {
+                                    IPEndPoint broadcastEndpoint = new IPEndPoint(broadcastAddress, DiscoveryPort);
+                                    await _udpClient.SendAsync(messageBytes, messageBytes.Length, broadcastEndpoint);
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. 同时向全局广播尝试一次，作为兜底
+                    IPEndPoint globalBroadcast = new IPEndPoint(IPAddress.Broadcast, DiscoveryPort);
+                    await _udpClient.SendAsync(messageBytes, messageBytes.Length, globalBroadcast);
                 }
                 catch (Exception ex)
                 {
@@ -220,6 +250,24 @@ namespace VideoCamServer
 
                 await Task.Delay(2000, token);
             }
+        }
+
+        // 计算定向广播地址的辅助方法
+        private IPAddress GetBroadcastAddress(IPAddress address, IPAddress subnetMask)
+        {
+            if (subnetMask == null) return null;
+
+            byte[] ipAddressBytes = address.GetAddressBytes();
+            byte[] subnetMaskBytes = subnetMask.GetAddressBytes();
+
+            if (ipAddressBytes.Length != subnetMaskBytes.Length) return null;
+
+            byte[] broadcastAddressBytes = new byte[ipAddressBytes.Length];
+            for (int i = 0; i < broadcastAddressBytes.Length; i++)
+            {
+                broadcastAddressBytes[i] = (byte)(ipAddressBytes[i] | (subnetMaskBytes[i] ^ 255));
+            }
+            return new IPAddress(broadcastAddressBytes);
         }
 
         public void StopBroadcast()

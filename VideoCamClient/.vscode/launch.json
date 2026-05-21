@@ -4,16 +4,21 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-{
-  "name": "Debug Android",
-  "cwd": "${workspaceFolder}",
-  "type": "reactnative",
-  "request": "launch",
-  "platform": "android",
-  "sourceMaps": true,
-  "webRoot": "${workspaceFolder}"
-},
-
+         {
+      "name": "Attach Android Hermes",
+      "type": "reactnative",
+      "request": "attach",
+      "cwd": "${workspaceFolder}",
+      "reactNativePath": "${workspaceFolder}/node_modules/react-native"
+    },
+        {
+            "name": "Debug Android",
+            "cwd": "${workspaceFolder}",
+            "type": "reactnative",
+            "request": "launch",
+            "platform": "android",
+            "enableDebug": true
+        },
         {
             "name": "Run Android",
             "cwd": "${workspaceFolder}",
