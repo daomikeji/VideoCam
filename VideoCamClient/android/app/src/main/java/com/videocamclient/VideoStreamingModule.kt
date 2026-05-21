@@ -8,6 +8,7 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import android.graphics.SurfaceTexture
 import com.facebook.react.bridge.*
 import kotlinx.coroutines.*
 import java.io.IOException
@@ -31,6 +32,7 @@ class VideoStreamingModule(context: ReactApplicationContext) : ReactContextBaseJ
 
     private val scope = CoroutineScope(Dispatchers.Default + Job())
     private var camera: Camera? = null
+    private var previewTexture: SurfaceTexture? = null
     private var mediaCodec: MediaCodec? = null
     private var udpSocket: DatagramSocket? = null
     private var tcpSocket: Socket? = null
@@ -128,15 +130,26 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
                 tcpTargetPort = tcpPort
 
                 // 初始化TCP连接
-                tcpSocket = Socket(ip, tcpPort)
+                tcpSocket = Socket()
+                tcpSocket?.connect(InetSocketAddress(ip, tcpPort), 5000)
                 Log.d(TAG, "TCP connected to $ip:$tcpPort")
 
-                // 初始化UDP Socket
+                // 初始化UDP Socket 并连接目标地址
                 udpSocket = DatagramSocket()
-                Log.d(TAG, "UDP socket created for $ip:$udpPort")
+                try {
+                    udpSocket?.connect(InetAddress.getByName(ip), udpPort)
+                    Log.d(TAG, "UDP socket connected to $ip:$udpPort")
+                } catch (e: Exception) {
+                    Log.w(TAG, "UDP connect failed, will send unconnected: ${e.message}")
+                }
 
-                // 初始化摄像头
-                initCamera()
+                // 初始化摄像头（在主线程）
+                try {
+                    reactApplicationContext.runOnUiQueueThread { initCamera() }
+                } catch (e: Exception) {
+                    // fallback to direct call if runOnUiQueueThread unavailable
+                    initCamera()
+                }
 
                 // 启动编码器
                 startEncoder()
@@ -168,6 +181,8 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
                 camera?.stopPreview()
                 camera?.release()
                 camera = null
+                try { previewTexture?.release() } catch (_: Exception) {}
+                previewTexture = null
 
                 // 停止编码器
                 mediaCodec?.stop()
@@ -248,9 +263,46 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
 
             val params = camera?.parameters
             params?.previewFormat = android.graphics.ImageFormat.NV21
-            params?.setPreviewSize(VIDEO_WIDTH, VIDEO_HEIGHT)
-            params?.setPreviewFpsRange(H264_FRAME_RATE * 1000, H264_FRAME_RATE * 1000)
+
+            // choose supported preview size close to desired
+            val supported = params?.supportedPreviewSizes
+            if (supported != null && supported.isNotEmpty()) {
+                var best = supported[0]
+                for (s in supported) {
+                    if (kotlin.math.abs(s.width - VIDEO_WIDTH) + kotlin.math.abs(s.height - VIDEO_HEIGHT) <
+                        kotlin.math.abs(best.width - VIDEO_WIDTH) + kotlin.math.abs(best.height - VIDEO_HEIGHT)
+                    ) best = s
+                }
+                params.setPreviewSize(best.width, best.height)
+            } else {
+                params?.setPreviewSize(VIDEO_WIDTH, VIDEO_HEIGHT)
+            }
+
+            // set fps range if available
+            try {
+                params?.let { safeParams ->
+                    val ranges = safeParams.supportedPreviewFpsRange
+                    if (!ranges.isNullOrEmpty()) {
+                        var bestRange = ranges[0]
+                        for (r in ranges) {
+                            if (r[1] >= H264_FRAME_RATE * 1000) { bestRange = r; break }
+                        }
+                        safeParams.setPreviewFpsRange(bestRange[0], bestRange[1])
+                    } else {
+                        safeParams.setPreviewFpsRange(H264_FRAME_RATE * 1000, H264_FRAME_RATE * 1000)
+                    }
+                }
+            } catch (_: Exception) {}
+
             camera?.parameters = params
+
+            // Use a SurfaceTexture so camera actually starts preview on devices without UI
+            try {
+                previewTexture = SurfaceTexture(10)
+                camera?.setPreviewTexture(previewTexture)
+            } catch (e: Exception) {
+                Log.w(TAG, "setPreviewTexture failed: ${e.message}")
+            }
 
             camera?.setPreviewCallback { data, _ ->
                 if (isStreaming && mediaCodec != null) {
@@ -330,30 +382,53 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
      */
     private fun encodeFrame(frameData: ByteArray) {
         try {
-            val inputBuffers = mediaCodec?.inputBuffers ?: return
-            val outputBuffers = mediaCodec?.outputBuffers ?: return
-
-            val inputBufferIndex = mediaCodec?.dequeueInputBuffer(10000) ?: return
-            if (inputBufferIndex >= 0) {
-                val inputBuffer = inputBuffers[inputBufferIndex]
-                inputBuffer.clear()
-                inputBuffer.put(frameData)
-                mediaCodec?.queueInputBuffer(inputBufferIndex, 0, frameData.size, System.nanoTime(), 0)
-            }
-
             val bufferInfo = MediaCodec.BufferInfo()
-            var outputBufferIndex = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: return
 
-            while (outputBufferIndex >= 0) {
-                val outputBuffer = outputBuffers[outputBufferIndex]
-                val chunk = ByteArray(bufferInfo.size)
-                outputBuffer.get(chunk)
+            if (Build.VERSION.SDK_INT >= 21) {
+                val inputBufferIndex = mediaCodec?.dequeueInputBuffer(10000) ?: return
+                if (inputBufferIndex >= 0) {
+                    val inputBuffer = mediaCodec?.getInputBuffer(inputBufferIndex)
+                    inputBuffer?.clear()
+                    inputBuffer?.put(frameData)
+                    mediaCodec?.queueInputBuffer(inputBufferIndex, 0, frameData.size, System.nanoTime() / 1000, 0)
+                }
 
-                // 通过UDP发送H.264数据包
-                sendUDPPacket(chunk)
+                var outputBufferIndex = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: return
+                while (outputBufferIndex >= 0) {
+                    val outputBuffer = mediaCodec?.getOutputBuffer(outputBufferIndex)
+                    val chunk = ByteArray(bufferInfo.size)
+                    outputBuffer?.get(chunk)
 
-                mediaCodec?.releaseOutputBuffer(outputBufferIndex, false)
-                outputBufferIndex = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: -1
+                    // 通过UDP发送H.264数据包
+                    sendUDPPacket(chunk)
+
+                    mediaCodec?.releaseOutputBuffer(outputBufferIndex, false)
+                    outputBufferIndex = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: -1
+                }
+            } else {
+                val inputBuffers = mediaCodec?.inputBuffers ?: return
+                val outputBuffers = mediaCodec?.outputBuffers ?: return
+
+                val inputBufferIndex = mediaCodec?.dequeueInputBuffer(10000) ?: return
+                if (inputBufferIndex >= 0) {
+                    val inputBuffer = inputBuffers[inputBufferIndex]
+                    inputBuffer.clear()
+                    inputBuffer.put(frameData)
+                    mediaCodec?.queueInputBuffer(inputBufferIndex, 0, frameData.size, System.nanoTime() / 1000, 0)
+                }
+
+                var outputBufferIndex = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: return
+                while (outputBufferIndex >= 0) {
+                    val outputBuffer = outputBuffers[outputBufferIndex]
+                    val chunk = ByteArray(bufferInfo.size)
+                    outputBuffer.get(chunk)
+
+                    // 通过UDP发送H.264数据包
+                    sendUDPPacket(chunk)
+
+                    mediaCodec?.releaseOutputBuffer(outputBufferIndex, false)
+                    outputBufferIndex = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: -1
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Encode frame error", e)
@@ -365,8 +440,6 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
      */
     private fun sendUDPPacket(data: ByteArray) {
         try {
-            if (udpSocket?.isConnected == false) return
-
             val address = InetAddress.getByName(udpTargetIP)
             val packet = DatagramPacket(data, data.size, address, udpTargetPort)
             udpSocket?.send(packet)
