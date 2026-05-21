@@ -22,6 +22,9 @@ namespace VideoCamServer
     {
         public event Action<string> StatusUpdated;
         public event Action<bool> ClientConnectionChanged;
+        public event Action<string> ClientIpChanged;
+        public event Action<string> CameraModeChanged;
+        public event Action<bool> FlashStatusChanged;
 
         private bool _isClientConnected = false;
         private string _cameraMode = "BACK"; // BACK | FRONT
@@ -45,10 +48,18 @@ namespace VideoCamServer
                     {
                         _cameraMode = "BACK";
                         _isFlashOn = false;
+                        ClientIpChanged?.Invoke("无连接");
+                        CameraModeChanged?.Invoke(_cameraMode);
+                        FlashStatusChanged?.Invoke(_isFlashOn);
                         StatusUpdated?.Invoke("已重置摄像头和闪光灯状态");
                     }
                 }
             }
+        }
+
+        public void UpdateClientIp(string ip)
+        {
+            ClientIpChanged?.Invoke(string.IsNullOrWhiteSpace(ip) ? "无连接" : ip);
         }
 
         public void UpdateCameraMode(string mode)
@@ -56,6 +67,7 @@ namespace VideoCamServer
             if (_cameraMode != mode)
             {
                 _cameraMode = mode;
+                CameraModeChanged?.Invoke(mode);
                 StatusUpdated?.Invoke($"摄像头模式已切换至: {mode}");
             }
         }
@@ -65,6 +77,7 @@ namespace VideoCamServer
             if (_isFlashOn != isOn)
             {
                 _isFlashOn = isOn;
+                FlashStatusChanged?.Invoke(isOn);
                 StatusUpdated?.Invoke($"闪光灯已 {(isOn ? "开启" : "关闭")}");
             }
         }
@@ -328,8 +341,10 @@ namespace VideoCamServer
                     if (await Task.WhenAny(clientTask, Task.Delay(-1, token)) == clientTask)
                     {
                         TcpClient client = await clientTask;
+                        var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString();
+                        _stateManager.UpdateClientIp(remoteIp);
                         _stateManager.IsClientConnected = true; // 更新连接状态
-                        Console.WriteLine($"[TCP] 客户端已连接: {((IPEndPoint)client.Client.RemoteEndPoint).Address}");
+                        Console.WriteLine($"[TCP] 客户端已连接: {remoteIp}");
                         _ = HandleTcpClientAsync(client, token);
                     }
                 }

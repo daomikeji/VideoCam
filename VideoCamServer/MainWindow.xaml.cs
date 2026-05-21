@@ -2,7 +2,6 @@
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using VideoCamServer.Services;
 
 namespace VideoCamServer
 {
@@ -19,7 +18,7 @@ namespace VideoCamServer
         private readonly WriteableBitmap _previewBitmap;
         private int _frameCounter;
 
-        private VideoServer _videoServer;
+        private ServerStateManager _stateManager;
 
         public MainWindow()
         {
@@ -40,114 +39,86 @@ namespace VideoCamServer
 
         private void InitializeServerAndEvents()
         {
-            // 初始化网络服务
-            _videoServer = new VideoServer();
+            var app = Application.Current as App;
+            _stateManager = app?.StateManager;
 
-            // 订阅网络服务事件：这是将后台网络线程结果推送到 UI 线程的关键
-            _videoServer.OnServerStatusChanged += OnServerStatusChanged;
-            _videoServer.OnClientConnected += OnClientConnected;
-            _videoServer.OnClientDisconnected += OnClientDisconnected;
-            _videoServer.OnCommandReceived += OnCommandReceived;
-            _videoServer.OnVideoDataReceived += OnVideoDataReceived;
+            if (_stateManager != null)
+            {
+                _stateManager.ClientConnectionChanged += OnClientConnectionChanged;
+                _stateManager.ClientIpChanged += OnClientIpChanged;
+                _stateManager.CameraModeChanged += OnCameraModeChanged;
+                _stateManager.FlashStatusChanged += OnFlashStatusChanged;
+                _stateManager.StatusUpdated += OnStatusUpdated;
+            }
 
-            // 初始UI状态设置
-            ServerStatusLabel.Text = "已停止";
-            ServerStatusLabel.Foreground = Brushes.Red;
-            ToggleServerButton.Background = new SolidColorBrush(Color.FromRgb(0, 122, 204)); // Blue
+            ServerStatusLabel.Text = "正在监听...";
+            ServerStatusLabel.Foreground = Brushes.Orange;
+            ToggleServerButton.Content = "服务运行中";
+            ToggleServerButton.IsEnabled = false;
+            ToggleServerButton.Background = Brushes.Gray;
+            VideoStatusText.Text = "等待客户端连接...";
         }
 
         // ------------------ UI 事件处理 ------------------
 
         private async void ToggleServerButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_videoServer.IsRunning)
-            {
-                await _videoServer.Stop();
-                RenderPlaceholderFrame("服务器已停止");
-            }
-            else
-            {
-                // 启动 TCP 9000 (控制) 和 UDP 9001 (视频)
-                await _videoServer.Start(9000, 9001);
-            }
+            await System.Threading.Tasks.Task.CompletedTask;
         }
 
         // ------------------ 网络事件处理器 (确保在 UI 线程上运行) ------------------
 
-        private void OnServerStatusChanged(bool isRunning)
+        private void OnClientConnectionChanged(bool isConnected)
         {
-            // 使用 Dispatcher.Invoke 确保 UI 更新操作在主线程上执行
             Dispatcher.Invoke(() =>
             {
-                if (isRunning)
+                if (isConnected)
                 {
-                    ServerStatusLabel.Text = "正在监听...";
-                    ServerStatusLabel.Foreground = Brushes.Orange;
-                    ToggleServerButton.Content = "关闭服务器";
-                    ToggleServerButton.Background = Brushes.DarkRed;
-                    VideoStatusText.Text = "等待客户端连接...";
+                    ServerStatusLabel.Text = "客户端已连接";
+                    ServerStatusLabel.Foreground = Brushes.Green;
+                    VideoStatusText.Text = "正在接收视频流...";
                 }
                 else
                 {
-                    ServerStatusLabel.Text = "已停止";
-                    ServerStatusLabel.Foreground = Brushes.Red;
-                    ToggleServerButton.Content = "启动服务器";
-                    ToggleServerButton.Background = new SolidColorBrush(Color.FromRgb(0, 122, 204));
-                    VideoStatusText.Text = "等待服务器启动...";
+                    ServerStatusLabel.Text = "正在监听...";
+                    ServerStatusLabel.Foreground = Brushes.Orange;
+                    VideoStatusText.Text = "客户端断开，等待新连接...";
+                    RenderPlaceholderFrame("等待新的视频流...");
                 }
             });
         }
 
-        private void OnClientConnected(string ipAddress)
+        private void OnClientIpChanged(string ipAddress)
         {
             Dispatcher.Invoke(() =>
             {
-                ClientIPLabel.Text = ipAddress;
-                ServerStatusLabel.Text = "客户端已连接";
-                ServerStatusLabel.Foreground = Brushes.Green;
-                VideoStatusText.Text = "正在接收视频流...";
+                ClientIPLabel.Text = string.IsNullOrWhiteSpace(ipAddress) ? "无连接" : ipAddress;
             });
         }
 
-        private void OnClientDisconnected()
+        private void OnCameraModeChanged(string mode)
         {
             Dispatcher.Invoke(() =>
             {
-                ClientIPLabel.Text = "无连接";
-                ServerStatusLabel.Text = "正在监听...";
-                ServerStatusLabel.Foreground = Brushes.Orange;
-                VideoStatusText.Text = "客户端断开，等待新连接...";
-                RenderPlaceholderFrame("等待新的视频流...");
+                CameraStateLabel.Text = mode == "FRONT" ? "前置 (Front)" : "后置 (Back)";
             });
         }
 
-        // 接收到移动端控制命令 (TCP)
-        private void OnCommandReceived(string command)
+        private void OnFlashStatusChanged(bool isOn)
         {
-            // 命令示例: SWITCH_CAMERA:FRONT, TOGGLE_FLASH:ON
-            string[] parts = command.Split(':');
-            string type = parts[0];
-            string value = parts.Length > 1 ? parts[1] : "";
-
             Dispatcher.Invoke(() =>
             {
-                if (type == "SWITCH_CAMERA")
-                {
-                    CameraStateLabel.Text = value == "FRONT" ? "前置 (Front)" : "后置 (Back)";
-                }
-                else if (type == "TOGGLE_FLASH")
-                {
-                    FlashStateLabel.Text = value == "ON" ? "开启 (ON)" : "关闭 (OFF)";
-                    FlashStateLabel.Foreground = value == "ON" ? Brushes.Gold : Brushes.Black;
-                }
-                // 在这里可以添加其他命令（如分辨率、帧率控制等）
+                FlashStateLabel.Text = isOn ? "开启 (ON)" : "关闭 (OFF)";
+                FlashStateLabel.Foreground = isOn ? Brushes.Gold : Brushes.Black;
             });
         }
 
-        // 接收到视频数据包 (UDP)
-        private void OnVideoDataReceived(byte[] data)
+        private void OnStatusUpdated(string status)
         {
-            Dispatcher.Invoke(() => RenderPreviewFrame(data));
+            Dispatcher.Invoke(() =>
+            {
+                VideoStatusText.Text = status;
+            });
         }
 
         private void RenderPreviewFrame(byte[] data)
