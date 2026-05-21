@@ -16,7 +16,9 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Socket
 import kotlin.math.min
-
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import android.net.wifi.WifiManager
 class VideoStreamingModule(context: ReactApplicationContext) : ReactContextBaseJavaModule(context) {
 
     companion object {
@@ -48,46 +50,68 @@ class VideoStreamingModule(context: ReactApplicationContext) : ReactContextBaseJ
      */
     @ReactMethod
     fun startDiscovery(port: Int, promise: Promise) {
+        Log.d(TAG, "startDiscovery called, port=$port, thread=${Thread.currentThread().name}")
         scope.launch {
-            try {
-                val socket = DatagramSocket(port)
-                socket.broadcast = true
-                socket.soTimeout = 5000 // 5秒超时
-
-                val buffer = ByteArray(1024)
-                val packet = DatagramPacket(buffer, buffer.size)
-
-                socket.receive(packet)
-                val response = String(packet.data, 0, packet.length)
-
-                // 解析服务器响应: VCAM|TCP_PORT|UDP_PORT 或 IP,TCP_PORT,UDP_PORT
-                val parts = response.split("|", ",")
-                if (parts.size >= 3) {
-                    // 支持两种格式: VCAM|9000|9001 或 192.168.1.100,9000,9001
-                    val ip = if (parts[0] == "VCAM") {
-                        // 如果第一部分是VCAM，IP在发送UDP包的源地址中获取
-                        packet.address.hostAddress ?: parts[1]
-                    } else {
-                        parts[0]
-                    }
-                    val tcp = parts[1].toInt()
-                    val udp = parts[2].toInt()
-
-                    val result = WritableNativeMap().apply {
-                        putBoolean("success", true)
-                        putString("ip", ip)
-                        putInt("tcp", tcp)
-                        putInt("udp", udp)
-                    }
-                    promise.resolve(result)
-                } else {
-                    promise.reject("DISCOVERY_ERROR", "Invalid server response format")
-                }
-                socket.close()
-            } catch (e: Exception) {
-                Log.e(TAG, "Discovery error", e)
-                promise.reject("DISCOVERY_ERROR", e.message)
+                    var socket: DatagramSocket? = null
+        var lock: WifiManager.MulticastLock? = null
+        try {
+           // 1) 获取 MulticastLock（真机上接收广播更稳定）
+            val wifi = reactApplicationContext.applicationContext
+                .getSystemService(Context.WIFI_SERVICE) as WifiManager
+            lock = wifi.createMulticastLock("videocam-discovery").apply {
+                setReferenceCounted(false)
+                acquire()
             }
+
+            // 2) 绑定 0.0.0.0:port
+            socket = DatagramSocket(null).apply {
+                reuseAddress = true
+                broadcast = true
+                soTimeout =5000
+                bind(InetSocketAddress("0.0.0.0", port))
+            }
+Log.d(TAG, "socket bound on 0.0.0.0:$port, waiting packet...")
+            // 3) 可选：主动发探测包（如果你的服务端是请求-响应模式）
+//            val probe = "VCAM_DISCOVER".toByteArray()
+//            val bcast = DatagramPacket(
+//                probe, probe.size,
+//                InetAddress.getByName("255.255.255.255"), port
+//            )
+//            socket.send(bcast)
+
+            // 4) 接收响应
+            val buf = ByteArray(1024)
+            val packet = DatagramPacket(buf, buf.size)
+            socket.receive(packet)
+Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddress}:${packet.port}")
+
+            val response = String(packet.data, 0, packet.length).trim()
+             Log.e(TAG, "from=${packet.address.hostAddress}:${packet.port}, response=$response")
+            val parts = response.split("|", ",").map { it.trim() }
+
+            if (parts.size >= 3) {
+                val ip = if (parts[0] == "VCAM") packet.address.hostAddress ?: "" else parts[0]
+                val tcp = parts[1].toInt()
+                val udp = parts[2].toInt()
+
+                val result = WritableNativeMap().apply {
+                    putBoolean("success", true)
+                    putString("ip", ip)
+                    putInt("tcp", tcp)
+                    putInt("udp", udp)
+                    putString("raw", response)
+                }
+                promise.resolve(result)
+            } else {
+                promise.reject("DISCOVERY_ERROR", "Invalid server response: $response")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Discovery error", e)
+            promise.reject("DISCOVERY_ERROR", e.message)
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+            try { if (lock?.isHeld == true) lock?.release() } catch (_: Exception) {}
+        }
         }
     }
 

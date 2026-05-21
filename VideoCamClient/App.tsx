@@ -9,6 +9,7 @@ import {
   Alert,
   NativeModules,
   Platform,
+  ScrollView,
 } from 'react-native';
 
 const { VideoStreamingModule } = NativeModules;
@@ -25,6 +26,11 @@ const App = () => {
   const [tcpPort, setTcpPort] = useState(9000);
   const [udpPort, setUdpPort] = useState(9001);
   const [status, setStatus] = useState('未连接，等待发现服务器...');
+  const [receivedMessages, setReceivedMessages] = useState<string[]>([]);
+
+  const addReceivedMessage = useCallback((message: string) => {
+    setReceivedMessages((prev) => [message, ...prev].slice(0, 50));
+  }, []);
 
   /**
    * 自动发现服务
@@ -44,11 +50,15 @@ const App = () => {
         setTcpPort(result.tcp);
         setUdpPort(result.udp);
         setStatus(`发现服务器成功: ${result.ip}`);
+        addReceivedMessage(`发现消息: ${result.raw ?? `IP=${result.ip}, TCP=${result.tcp}, UDP=${result.udp}`}`);
       } else {
         setStatus(`未发现服务器。请手动检查 IP。`);
+        addReceivedMessage(`发现消息失败: ${result.raw ?? '无效响应'}`);
       }
     } catch (e) {
-      setStatus(`发现过程中发生错误: ${e instanceof Error ? e.message : String(e)}`);
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      setStatus(`发现过程中发生错误: ${errorMessage}`);
+      addReceivedMessage(`发现错误: ${errorMessage}`);
       console.error(e);
     } finally {
       setIsDiscovering(false);
@@ -88,8 +98,10 @@ const App = () => {
         setIsConnected(true);
         setIsStreaming(true);
         setStatus(`连接成功！正在通过 UDP 发送视频流...`);
+        addReceivedMessage(`连接成功: ${result.message}`);
       } else {
         setStatus(`连接失败: ${result.message}`);
+        addReceivedMessage(`连接失败: ${result.message}`);
       }
     } catch (e) {
       setStatus(`连接过程中发生错误: ${e instanceof Error ? e.message : String(e)}`);
@@ -169,6 +181,21 @@ const App = () => {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <Text style={styles.title}>iVCam 克隆 - 移动端</Text>
+
+        <View style={styles.messagePreviewCard}>
+          <Text style={styles.messageTitle}>最近接收消息</Text>
+          <ScrollView style={styles.messagePreviewScroll}>
+            {receivedMessages.length === 0 ? (
+              <Text style={styles.messageText}>暂无接收消息</Text>
+            ) : (
+              receivedMessages.slice(0, 3).map((msg, index) => (
+                <Text key={`${msg}-${index}`} style={styles.messageText}>
+                  {msg}
+                </Text>
+              ))
+            )}
+          </ScrollView>
+        </View>
 
         {/* 状态显示区 */}
         <View style={styles.statusCard}>
@@ -255,6 +282,21 @@ const App = () => {
             <Text style={styles.streamingText}>视频流正在发送中...</Text>
           </View>
         )}
+
+        <View style={styles.messageLogCard}>
+          <Text style={styles.messageTitle}>消息日志</Text>
+          <ScrollView style={styles.messageLogScroll}>
+            {receivedMessages.length === 0 ? (
+              <Text style={styles.messageText}>暂无接收消息</Text>
+            ) : (
+              receivedMessages.map((msg, index) => (
+                <Text key={`${msg}-${index}`} style={styles.messageText}>
+                  {msg}
+                </Text>
+              ))
+            )}
+          </ScrollView>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -307,6 +349,43 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999',
     minHeight: 20,
+  },
+  messagePreviewCard: {
+    width: '100%',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    padding: 10,
+    marginBottom: 12,
+  },
+  messageTitle: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 6,
+    fontWeight: '600',
+  },
+  messagePreviewScroll: {
+    maxHeight: 90,
+  },
+  messageLogCard: {
+    width: '100%',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    padding: 10,
+    marginTop: 16,
+    maxHeight: 180,
+  },
+  messageLogScroll: {
+    maxHeight: 160,
+  },
+  messageText: {
+    color: '#444',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 4,
   },
   infoCard: {
     backgroundColor: '#E3F2FD',
