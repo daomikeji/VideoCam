@@ -9,6 +9,7 @@ import {
   Alert,
   NativeModules,
   Platform,
+  PermissionsAndroid,
 } from 'react-native';
 
 const { VideoStreamingModule } = NativeModules;
@@ -114,11 +115,29 @@ const App = () => {
       setStatus(`断开连接时发生错误: ${e instanceof Error ? e.message : String(e)}`);
     }
   }, []);
+async function ensureCameraPermissions(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
 
+  const result = await PermissionsAndroid.requestMultiple([
+    PermissionsAndroid.PERMISSIONS.CAMERA,
+    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+  ]);
+
+  const ok =
+    result[PermissionsAndroid.PERMISSIONS.CAMERA] === PermissionsAndroid.RESULTS.GRANTED &&
+    result[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] === PermissionsAndroid.RESULTS.GRANTED;
+
+  if (!ok) {
+    Alert.alert('权限不足', '请先授予相机和麦克风权限');
+  }
+  return ok;
+}
   /**
    * 切换前后摄像头
    */
   const toggleCamera = useCallback(async () => {
+     const ok = await ensureCameraPermissions();
+  if (!ok) return;
     if (!isConnected || !VideoStreamingModule?.sendControlCommand) return;
 
     const newCameraIsFront = !isFrontCamera;
@@ -168,7 +187,7 @@ const App = () => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <Text style={styles.title}>iVCam 克隆 - 移动端</Text>
+        <Text style={styles.title}>虚拟摄像头 - 移动端</Text>
 
         {/* 状态显示区 */}
         <View style={styles.statusCard}>
