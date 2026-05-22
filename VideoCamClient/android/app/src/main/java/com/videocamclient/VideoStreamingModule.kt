@@ -1,6 +1,7 @@
 package com.videocamclient
 
 import android.content.Context
+import android.graphics.SurfaceTexture
 import android.hardware.Camera
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -8,18 +9,24 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.Build
 import android.util.Log
-import android.graphics.SurfaceTexture
+import android.view.TextureView
+import android.view.ViewGroup
+import android.view.View
 import com.facebook.react.bridge.*
+import com.facebook.react.uimanager.NativeViewHierarchyManager
+import com.facebook.react.uimanager.UIManagerModule
 import kotlinx.coroutines.*
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Socket
-import kotlin.math.min
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import android.net.wifi.WifiManager
+import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.math.min
 class VideoStreamingModule(context: ReactApplicationContext) : ReactContextBaseJavaModule(context) {
 
     companion object {
@@ -33,6 +40,7 @@ class VideoStreamingModule(context: ReactApplicationContext) : ReactContextBaseJ
     private val scope = CoroutineScope(Dispatchers.Default + Job())
     private var camera: Camera? = null
     private var previewTexture: SurfaceTexture? = null
+    private var ownsPreviewTexture = false
     private var mediaCodec: MediaCodec? = null
     private var udpSocket: DatagramSocket? = null
     private var tcpSocket: Socket? = null
@@ -168,6 +176,138 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
         }
     }
 
+    @ReactMethod
+    fun connectAndStreamWithPreview(ip: String, tcpPort: Int, udpPort: Int, previewViewId: Int, promise: Promise) {
+        scope.launch {
+            try {
+                udpTargetIP = ip
+                udpTargetPort = udpPort
+                tcpTargetIP = ip
+                tcpTargetPort = tcpPort
+
+                // 初始化TCP连接
+                tcpSocket = Socket()
+                tcpSocket?.connect(InetSocketAddress(ip, tcpPort), 5000)
+                Log.d(TAG, "TCP connected to $ip:$tcpPort")
+
+                // 初始化UDP Socket 并连接目标地址
+                udpSocket = DatagramSocket()
+                try {
+                    udpSocket?.connect(InetAddress.getByName(ip), udpPort)
+                    Log.d(TAG, "UDP socket connected to $ip:$udpPort")
+                } catch (e: Exception) {
+                    Log.w(TAG, "UDP connect failed, will send unconnected: ${e.message}")
+                }
+
+                // 获取预览 SurfaceTexture
+                val surfaceTexture = getPreviewSurfaceTexture(previewViewId)
+                Log.d(TAG, "resolved preview surfaceTexture=$surfaceTexture for viewId=$previewViewId")
+                if (surfaceTexture == null) {
+                    Log.e(TAG, "Preview surface not available for viewId=$previewViewId")
+                    promise.reject("PREVIEW_ERROR", "Preview surface not available")
+                    return@launch
+                }
+
+                // 初始化摄像头（在主线程）
+                withContext(Dispatchers.Main) {
+                    initCamera(surfaceTexture)
+                }
+
+                // 启动编码器
+                startEncoder()
+
+                isStreaming = true
+
+                val result = WritableNativeMap().apply {
+                    putBoolean("success", true)
+                    putString("message", "Connected and streaming")
+                }
+                promise.resolve(result)
+            } catch (e: Exception) {
+                Log.e(TAG, "Connection error", e)
+                promise.reject("CONNECTION_ERROR", e.message)
+            }
+        }
+    }
+
+    private suspend fun getPreviewSurfaceTexture(viewId: Int): SurfaceTexture? = suspendCancellableCoroutine { cont ->
+        val currentTexView = CameraPreviewManager.currentTextureView
+        if (currentTexView != null) {
+            Log.d(TAG, "got current TextureView from manager, isAvailable=${currentTexView.isAvailable}")
+            if (currentTexView.isAvailable) {
+                cont.resume(currentTexView.surfaceTexture)
+                return@suspendCancellableCoroutine
+            }
+            currentTexView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                    Log.d(TAG, "manager TextureView surface available, width=$width height=$height")
+                    currentTexView.surfaceTextureListener = null
+                    cont.resume(surface)
+                }
+
+                override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+
+                override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = false
+
+                override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+            }
+            return@suspendCancellableCoroutine
+        }
+
+        val uiManager = reactApplicationContext.getNativeModule(UIManagerModule::class.java)
+        if (uiManager == null) {
+            cont.resume(null)
+            return@suspendCancellableCoroutine
+        }
+
+        uiManager.addUIBlock { nativeViewHierarchyManager: NativeViewHierarchyManager ->
+            try {
+                val view = nativeViewHierarchyManager.resolveView(viewId)
+                Log.d(TAG, "resolved view for preview id=$viewId class=${view?.javaClass?.name} view=${view}")
+
+                fun findTextureView(search: View?): TextureView? {
+                    if (search == null) return null
+                    if (search is TextureView) return search
+                    if (search is ViewGroup) {
+                        for (i in 0 until search.childCount) {
+                            val found = findTextureView(search.getChildAt(i))
+                            if (found != null) return found
+                        }
+                    }
+                    return null
+                }
+
+                val texView = findTextureView(view)
+                if (texView != null) {
+                    Log.d(TAG, "preview TextureView found, isAvailable=${texView.isAvailable}")
+                    if (texView.isAvailable) {
+                        cont.resume(texView.surfaceTexture)
+                    } else {
+                        texView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                                Log.d(TAG, "preview TextureView surface available, width=$width height=$height")
+                                texView.surfaceTextureListener = null
+                                cont.resume(surface)
+                            }
+
+                            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+
+                            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = false
+
+                            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                        }
+                    }
+                } else {
+                    Log.e(TAG, "Preview TextureView not found for viewId=$viewId, resolvedView=${view?.javaClass?.name}")
+                    cont.resume(null)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Preview retrieval error", e)
+                cont.resume(null)
+            }
+        }
+    }
+
     /**
      * 断开连接
      */
@@ -181,8 +321,11 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
                 camera?.stopPreview()
                 camera?.release()
                 camera = null
-                try { previewTexture?.release() } catch (_: Exception) {}
+                if (ownsPreviewTexture) {
+                    try { previewTexture?.release() } catch (_: Exception) {}
+                }
                 previewTexture = null
+                ownsPreviewTexture = false
 
                 // 停止编码器
                 mediaCodec?.stop()
@@ -245,8 +388,14 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
     /**
      * 初始化摄像头
      */
-    private fun initCamera() {
+    private fun initCamera(previewSurfaceTexture: SurfaceTexture? = null) {
         try {
+            if (previewTexture != null && ownsPreviewTexture) {
+                try { previewTexture?.release() } catch (_: Exception) {}
+                previewTexture = null
+                ownsPreviewTexture = false
+            }
+
             val cameraId = if (isFrontCamera) Camera.CameraInfo.CAMERA_FACING_FRONT else Camera.CameraInfo.CAMERA_FACING_BACK
             var targetCameraId = 0
 
@@ -296,9 +445,28 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
 
             camera?.parameters = params
 
-            // Use a SurfaceTexture so camera actually starts preview on devices without UI
             try {
-                previewTexture = SurfaceTexture(10)
+                val textureToUse = previewSurfaceTexture ?: previewTexture
+                if (textureToUse != null) {
+                    previewTexture = textureToUse
+                    ownsPreviewTexture = false
+                } else {
+                    previewTexture = SurfaceTexture(10)
+                    ownsPreviewTexture = true
+                }
+
+                previewTexture?.let {
+                    try {
+                        val previewSize = camera?.parameters?.previewSize
+                        if (previewSize != null) {
+                            it.setDefaultBufferSize(previewSize.width, previewSize.height)
+                        }
+                    } catch (ignored: Exception) {
+                        Log.w(TAG, "setDefaultBufferSize failed: ${ignored.message}")
+                    }
+                }
+
+                Log.d(TAG, "using previewTexture=$previewTexture, ownsPreviewTexture=$ownsPreviewTexture")
                 camera?.setPreviewTexture(previewTexture)
             } catch (e: Exception) {
                 Log.w(TAG, "setPreviewTexture failed: ${e.message}")
@@ -325,7 +493,11 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
             camera?.stopPreview()
             camera?.release()
             isFrontCamera = toFront
-            initCamera()
+            if (previewTexture != null && !ownsPreviewTexture) {
+                initCamera(previewTexture)
+            } else {
+                initCamera()
+            }
             Log.d(TAG, "Camera switched to: ${if (toFront) "FRONT" else "BACK"}")
         } catch (e: Exception) {
             Log.e(TAG, "Switch camera error", e)

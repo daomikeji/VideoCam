@@ -95,14 +95,18 @@ namespace VideoCamServer
     /// </summary>
     public class VideoProcessor
     {
-        private const int VideoWidth = 1920;
-        private const int VideoHeight = 1080;
+        private const int TargetFps = 30;
 
         public event FrameReadyEventHandler FrameReady;
 
         private IntPtr _ffmpegDecoderContext = IntPtr.Zero;
+        private H264FfmpegDecoder _h264Decoder;
         private VirtualCamera _virtualCamera;
         private readonly object _cameraLock = new object();
+        private DateTime _lastFrameTime = DateTime.MinValue;
+        private long _unsupportedPacketCounter;
+        private int _lastFrameWidth;
+        private int _lastFrameHeight;
 
         public VideoProcessor()
         {
@@ -112,20 +116,31 @@ namespace VideoCamServer
         private void InitializeDecoder()
         {
             Console.WriteLine("[Decoder] 正在初始化 H.264 解码器...");
-            _ffmpegDecoderContext = new IntPtr(1);
-            Console.WriteLine("[Decoder] 解码器初始化完成。");
+            try
+            {
+                _h264Decoder = new H264FfmpegDecoder();
+                _ffmpegDecoderContext = new IntPtr(1);
+                Console.WriteLine("[Decoder] 解码器初始化完成。");
+            }
+            catch (Exception ex)
+            {
+                _ffmpegDecoderContext = IntPtr.Zero;
+                Console.WriteLine($"[Decoder] 初始化失败: {ex.Message}");
+            }
         }
 
-        private void EnsureVirtualCameraInitialized()
+        private void EnsureVirtualCameraInitialized(int width, int height)
         {
-            if (_virtualCamera == null)
+            if (_virtualCamera == null || _lastFrameWidth != width || _lastFrameHeight != height)
             {
                 lock (_cameraLock)
                 {
-                    if (_virtualCamera == null)
+                    if (_virtualCamera == null || _lastFrameWidth != width || _lastFrameHeight != height)
                     {
-                        // Initialize the virtual camera with the same resolution and a default FPS of 30
-                        _virtualCamera = new VirtualCamera(VideoWidth, VideoHeight, 30);
+                        _virtualCamera?.Shutdown();
+                        _virtualCamera = new VirtualCamera(width, height, TargetFps);
+                        _lastFrameWidth = width;
+                        _lastFrameHeight = height;
                     }
                 }
             }
@@ -134,37 +149,36 @@ namespace VideoCamServer
         public void ProcessUdpPacket(byte[] data)
         {
             if (_ffmpegDecoderContext == IntPtr.Zero) return;
+            if (data == null || data.Length == 0) return;
 
             try
             {
-                // 模拟解码逻辑：每收到 50 个 UDP 包后，就产生一个解码帧
-                if (data.Length > 100 && data[5] % 50 == 0)
+                var now = DateTime.UtcNow;
+                if ((now - _lastFrameTime).TotalMilliseconds < (1000.0 / TargetFps))
                 {
-                    // 假设这是解码后得到的帧数据
-                    // 在实际应用中，这里应该是 H.264 解码器的输出
-                    
-                    byte[] decodedFrame;
-                    
-                    // 示例：如果解码器输出的是 NV12 格式，需要转换为 BGRA
-                    // byte[] nv12Frame = DecodeH264ToNV12(data);
-                    // decodedFrame = VideoFormatConverter.ConvertNV12ToBGRA(nv12Frame, VideoWidth, VideoHeight);
-                    
-                    // 示例：如果解码器输出的是 I420 格式
-                    // byte[] i420Frame = DecodeH264ToI420(data);
-                    // decodedFrame = VideoFormatConverter.ConvertI420ToBGRA(i420Frame, VideoWidth, VideoHeight);
-                    
-                    // 目前使用模拟数据（BGRA 格式）
-                    decodedFrame = new byte[VideoWidth * VideoHeight * 4]; // BGRA format: 4 bytes per pixel
-                    
-                    // 触发帧就绪事件（用于 UI 预览等）
-                    FrameReady?.Invoke(decodedFrame, VideoWidth, VideoHeight);
-
-                    // Ensure virtual camera is initialized before pushing frame
-                    EnsureVirtualCameraInitialized();
-                    
-                    // Push the frame to the virtual camera
-                    _virtualCamera?.PushFrame(decodedFrame);
+                    return;
                 }
+                _lastFrameTime = now;
+
+                if (_h264Decoder == null)
+                {
+                    return;
+                }
+
+                if (!_h264Decoder.TryDecode(data, out byte[] decodedFrame, out int width, out int height))
+                {
+                    _unsupportedPacketCounter++;
+                    if (_unsupportedPacketCounter % 120 == 0)
+                    {
+                        Console.WriteLine("[Decoder] 当前 UDP 包未形成可解码帧，等待更多 H.264 数据...");
+                    }
+                    return;
+                }
+
+                FrameReady?.Invoke(decodedFrame, width, height);
+
+                EnsureVirtualCameraInitialized(width, height);
+                _virtualCamera?.PushFrame(decodedFrame);
             }
             catch (Exception ex)
             {
@@ -177,6 +191,8 @@ namespace VideoCamServer
             if (_ffmpegDecoderContext != IntPtr.Zero)
             {
                 Console.WriteLine("[Decoder] 正在关闭解码器并释放资源...");
+                _h264Decoder?.Dispose();
+                _h264Decoder = null;
                 _ffmpegDecoderContext = IntPtr.Zero;
             }
 
@@ -202,7 +218,7 @@ namespace VideoCamServer
             _tcpPort = tcpPort;
             _udpPort = udpPort;
             _cancellationTokenSource = new CancellationTokenSource();
-            
+
             // 恢复使用系统随机分配的源端口
             // 因为部分路由器或手机系统会直接丢弃 "源端口 == 目标端口" 的 UDP 广播包
             _udpClient = new UdpClient();

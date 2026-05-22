@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,18 @@ import {
   Alert,
   NativeModules,
   Platform,
-  PermissionsAndroid,
+  ScrollView,
+  ViewStyle,
+  requireNativeComponent,
+  findNodeHandle,
 } from 'react-native';
+import { requestCameraPermission, requestMicrophonePermission } from './permissions';
 
 const { VideoStreamingModule } = NativeModules;
+interface CameraPreviewProps {
+  style?: ViewStyle;
+}
+const CameraPreview = requireNativeComponent<CameraPreviewProps>('CameraPreview');
 
 const DISCOVERY_PORT = 9005;
 
@@ -26,6 +34,22 @@ const App = () => {
   const [tcpPort, setTcpPort] = useState(9000);
   const [udpPort, setUdpPort] = useState(9001);
   const [status, setStatus] = useState('未连接，等待发现服务器...');
+  const [receivedMessages, setReceivedMessages] = useState<string[]>([]);
+  const [previewViewId, setPreviewViewId] = useState<number | null>(null);
+  const previewRef = useRef<any>(null);
+
+  const addReceivedMessage = useCallback((message: string) => {
+    setReceivedMessages((prev) => [message, ...prev].slice(0, 50));
+  }, []);
+
+  const setPreviewRef = useCallback((ref: any) => {
+    previewRef.current = ref;
+    const handle = findNodeHandle(ref);
+    console.log('CameraPreview ref handle', handle, ref);
+    if (typeof handle === 'number') {
+      setPreviewViewId(handle);
+    }
+  }, []);
 
   /**
    * 自动发现服务
@@ -45,21 +69,37 @@ const App = () => {
         setTcpPort(result.tcp);
         setUdpPort(result.udp);
         setStatus(`发现服务器成功: ${result.ip}`);
+        addReceivedMessage(`发现消息: ${result.raw ?? `IP=${result.ip}, TCP=${result.tcp}, UDP=${result.udp}`}`);
       } else {
         setStatus(`未发现服务器。请手动检查 IP。`);
+        addReceivedMessage(`发现消息失败: ${result.raw ?? '无效响应'}`);
       }
     } catch (e) {
-      setStatus(`发现过程中发生错误: ${e instanceof Error ? e.message : String(e)}`);
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      setStatus(`发现过程中发生错误: ${errorMessage}`);
+      addReceivedMessage(`发现错误: ${errorMessage}`);
       console.error(e);
     } finally {
       setIsDiscovering(false);
     }
   }, [isDiscovering]);
 
-  // 组件加载时自动启动发现服务
+  // 组件加载时请求权限并自动启动发现服务（仅调用一次）
   useEffect(() => {
-    startDiscovery();
-  }, [startDiscovery]);
+    const init = async () => {
+      const cameraOk = await requestCameraPermission();
+      const micOk = await requestMicrophonePermission();
+
+      if (!cameraOk || !micOk) {
+        setStatus('需要摄像头/麦克风权限，请在设置中允许。');
+        return;
+      }
+
+      startDiscovery();
+    };
+
+    init();
+  }, []);
 
   /**
    * 核心方法：连接、启动摄像头、编码和流传输。
@@ -72,31 +112,39 @@ const App = () => {
       return;
     }
 
-    if (!VideoStreamingModule?.connectAndStream) {
+    if (!VideoStreamingModule?.connectAndStreamWithPreview) {
       setStatus('错误：原生模块未加载。');
+      return;
+    }
+
+    if (previewViewId == null) {
+      setStatus('错误：预览视图尚未准备好，请稍候再试。');
       return;
     }
 
     setStatus(`尝试连接到 ${targetIP}:${tcpPort}...`);
     try {
-      const result = await VideoStreamingModule.connectAndStream(
+      const result = await VideoStreamingModule.connectAndStreamWithPreview(
         targetIP,
         tcpPort,
-        udpPort
+        udpPort,
+        previewViewId
       );
 
       if (result.success) {
         setIsConnected(true);
         setIsStreaming(true);
         setStatus(`连接成功！正在通过 UDP 发送视频流...`);
+        addReceivedMessage(`连接成功: ${result.message}`);
       } else {
         setStatus(`连接失败: ${result.message}`);
+        addReceivedMessage(`连接失败: ${result.message}`);
       }
     } catch (e) {
       setStatus(`连接过程中发生错误: ${e instanceof Error ? e.message : String(e)}`);
       console.error(e);
     }
-  }, [discoveredIP, tcpPort, udpPort]);
+  }, [discoveredIP, tcpPort, udpPort, previewViewId]);
 
   /**
    * 停止流传输
@@ -115,29 +163,11 @@ const App = () => {
       setStatus(`断开连接时发生错误: ${e instanceof Error ? e.message : String(e)}`);
     }
   }, []);
-async function ensureCameraPermissions(): Promise<boolean> {
-  if (Platform.OS !== 'android') return true;
 
-  const result = await PermissionsAndroid.requestMultiple([
-    PermissionsAndroid.PERMISSIONS.CAMERA,
-    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-  ]);
-
-  const ok =
-    result[PermissionsAndroid.PERMISSIONS.CAMERA] === PermissionsAndroid.RESULTS.GRANTED &&
-    result[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] === PermissionsAndroid.RESULTS.GRANTED;
-
-  if (!ok) {
-    Alert.alert('权限不足', '请先授予相机和麦克风权限');
-  }
-  return ok;
-}
   /**
    * 切换前后摄像头
    */
   const toggleCamera = useCallback(async () => {
-     const ok = await ensureCameraPermissions();
-  if (!ok) return;
     if (!isConnected || !VideoStreamingModule?.sendControlCommand) return;
 
     const newCameraIsFront = !isFrontCamera;
@@ -187,7 +217,30 @@ async function ensureCameraPermissions(): Promise<boolean> {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <Text style={styles.title}>虚拟摄像头 - 移动端</Text>
+        <Text style={styles.title}>iVCam 克隆 - 移动端</Text>
+
+        <View style={styles.previewContainer}>
+          <CameraPreview
+            ref={setPreviewRef}
+            style={styles.preview}
+          />
+          <Text style={styles.previewLabel}>摄像头预览</Text>
+        </View>
+
+        <View style={styles.messagePreviewCard}>
+          <Text style={styles.messageTitle}>最近接收消息</Text>
+          <ScrollView style={styles.messagePreviewScroll}>
+            {receivedMessages.length === 0 ? (
+              <Text style={styles.messageText}>暂无接收消息</Text>
+            ) : (
+              receivedMessages.slice(0, 3).map((msg, index) => (
+                <Text key={`${msg}-${index}`} style={styles.messageText}>
+                  {msg}
+                </Text>
+              ))
+            )}
+          </ScrollView>
+        </View>
 
         {/* 状态显示区 */}
         <View style={styles.statusCard}>
@@ -274,6 +327,21 @@ async function ensureCameraPermissions(): Promise<boolean> {
             <Text style={styles.streamingText}>视频流正在发送中...</Text>
           </View>
         )}
+
+        <View style={styles.messageLogCard}>
+          <Text style={styles.messageTitle}>消息日志</Text>
+          <ScrollView style={styles.messageLogScroll}>
+            {receivedMessages.length === 0 ? (
+              <Text style={styles.messageText}>暂无接收消息</Text>
+            ) : (
+              receivedMessages.map((msg, index) => (
+                <Text key={`${msg}-${index}`} style={styles.messageText}>
+                  {msg}
+                </Text>
+              ))
+            )}
+          </ScrollView>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -327,6 +395,43 @@ const styles = StyleSheet.create({
     color: '#999',
     minHeight: 20,
   },
+  messagePreviewCard: {
+    width: '100%',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    padding: 10,
+    marginBottom: 12,
+  },
+  messageTitle: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 6,
+    fontWeight: '600',
+  },
+  messagePreviewScroll: {
+    maxHeight: 90,
+  },
+  messageLogCard: {
+    width: '100%',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    padding: 10,
+    marginTop: 16,
+    maxHeight: 180,
+  },
+  messageLogScroll: {
+    maxHeight: 160,
+  },
+  messageText: {
+    color: '#444',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 4,
+  },
   infoCard: {
     backgroundColor: '#E3F2FD',
     borderRadius: 12,
@@ -339,6 +444,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#1565C0',
     marginBottom: 8,
+  },
+  previewContainer: {
+    width: '100%',
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    marginBottom: 16,
+    position: 'relative',
+  },
+  preview: {
+    width: '100%',
+    height: 220,
+    backgroundColor: '#000',
+  },
+  previewLabel: {
+    color: '#fff',
+    fontSize: 12,
+    padding: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    position: 'absolute',
+    left: 12,
+    bottom: 12,
+    borderRadius: 8,
   },
   discoveryButton: {
     backgroundColor: '#1976D2',

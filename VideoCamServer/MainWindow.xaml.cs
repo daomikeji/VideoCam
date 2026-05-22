@@ -41,6 +41,7 @@ namespace VideoCamServer
         {
             var app = Application.Current as App;
             _stateManager = app?.StateManager;
+            var videoProcessor = app?.VideoProcessor;
 
             if (_stateManager != null)
             {
@@ -49,6 +50,11 @@ namespace VideoCamServer
                 _stateManager.CameraModeChanged += OnCameraModeChanged;
                 _stateManager.FlashStatusChanged += OnFlashStatusChanged;
                 _stateManager.StatusUpdated += OnStatusUpdated;
+            }
+
+            if (videoProcessor != null)
+            {
+                videoProcessor.FrameReady += OnFrameReady;
             }
 
             ServerStatusLabel.Text = "正在监听...";
@@ -121,28 +127,41 @@ namespace VideoCamServer
             });
         }
 
-        private void RenderPreviewFrame(byte[] data)
+        private void OnFrameReady(byte[] frameData, int width, int height)
         {
-            _frameCounter++;
-            int seed = data.Length > 0 ? data[0] : _frameCounter;
+            Dispatcher.Invoke(() => RenderPreviewFrame(frameData, width, height));
+        }
+
+        private void RenderPreviewFrame(byte[] data, int sourceWidth, int sourceHeight)
+        {
+            if (data == null || sourceWidth <= 0 || sourceHeight <= 0)
+            {
+                return;
+            }
+
+            int sourceStride = sourceWidth * BytesPerPixel;
+            int expectedLength = sourceStride * sourceHeight;
+            if (data.Length < expectedLength)
+            {
+                return;
+            }
 
             for (int y = 0; y < PreviewHeight; y++)
             {
+                int srcY = y * sourceHeight / PreviewHeight;
                 for (int x = 0; x < PreviewWidth; x++)
                 {
-                    int pixelIndex = (y * PreviewWidth + x) * BytesPerPixel;
-                    byte blue = (byte)((x + seed) % 256);
-                    byte green = (byte)((y + seed * 2) % 256);
-                    byte red = (byte)((x + y + seed * 3 + _frameCounter) % 256);
+                    int srcX = x * sourceWidth / PreviewWidth;
+                    int srcPixel = srcY * sourceStride + srcX * BytesPerPixel;
+                    int dstPixel = (y * PreviewWidth + x) * BytesPerPixel;
 
-                    _previewBuffer[pixelIndex] = blue;
-                    _previewBuffer[pixelIndex + 1] = green;
-                    _previewBuffer[pixelIndex + 2] = red;
-                    _previewBuffer[pixelIndex + 3] = 0;
+                    _previewBuffer[dstPixel] = data[srcPixel];
+                    _previewBuffer[dstPixel + 1] = data[srcPixel + 1];
+                    _previewBuffer[dstPixel + 2] = data[srcPixel + 2];
+                    _previewBuffer[dstPixel + 3] = 0;
                 }
             }
 
-            DrawCenterMarker();
             _previewBitmap.WritePixels(new Int32Rect(0, 0, PreviewWidth, PreviewHeight), _previewBuffer, PreviewWidth * BytesPerPixel, 0);
         }
 

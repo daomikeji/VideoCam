@@ -15,6 +15,7 @@ namespace VideoCamServer
         private ServerStateManager _stateManager;
 
         public ServerStateManager StateManager => _stateManager;
+        public VideoProcessor VideoProcessor => _videoProcessor;
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -36,7 +37,7 @@ namespace VideoCamServer
 
                 // 1. 初始化状态管理器
                 _stateManager = new ServerStateManager();
-                
+
                 // 订阅状态更新事件（可选）
                 _stateManager.StatusUpdated += status =>
                 {
@@ -77,13 +78,13 @@ namespace VideoCamServer
         {
             // 清理资源
             Console.WriteLine("[App] 正在关闭后台服务...");
-            
+
             _networkListener?.StopListeners();
             _discoveryService?.StopBroadcast();
             _videoProcessor?.Shutdown();
 
             Console.WriteLine("[App] 后台服务已关闭");
-            
+
             base.OnExit(e);
         }
     }
