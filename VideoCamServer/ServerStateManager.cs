@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -108,6 +110,14 @@ namespace VideoCamServer
         private int _lastFrameWidth;
         private int _lastFrameHeight;
 
+        private const int UdpFragmentHeaderSize = 12;
+        private static readonly byte[] UdpFragmentMagic = new byte[] { (byte)'V', (byte)'C', (byte)'A', (byte)'M' };
+        private const byte UdpFragmentVersion = 1;
+        private const int UdpReassemblyTimeoutMs = 3000;
+
+        private readonly object _reassemblyLock = new object();
+        private readonly Dictionary<uint, UdpNalAssemblyState> _udpNalAssemblies = new Dictionary<uint, UdpNalAssemblyState>();
+
         public VideoProcessor()
         {
             InitializeDecoder();
@@ -150,22 +160,42 @@ namespace VideoCamServer
         {
             if (_ffmpegDecoderContext == IntPtr.Zero) return;
             if (data == null || data.Length == 0) return;
+            if (_h264Decoder == null) return;
 
             try
             {
-                var now = DateTime.UtcNow;
-                if ((now - _lastFrameTime).TotalMilliseconds < (1000.0 / TargetFps))
+                byte[] packetToDecode = null;
+                bool isFragmentPacket;
+                if (TryReassembleFragment(data, out byte[] reassembledNal, out isFragmentPacket))
+                {
+                    packetToDecode = reassembledNal;
+                }
+                else if (isFragmentPacket)
+                {
+                    // 片段还没收齐，继续等待更多数据。
+                    return;
+                }
+                else if (IsAnnexBPacket(data))
+                {
+                    packetToDecode = data;
+                }
+                else
+                {
+                    _unsupportedPacketCounter++;
+                    if (_unsupportedPacketCounter % 120 == 0)
+                    {
+                        Console.WriteLine("[Decoder] 收到非标准 UDP 包，忽略数据。等待 H.264 包或自定义分片包。");
+                    }
+                    return;
+                }
+
+                if (packetToDecode == null || packetToDecode.Length == 0)
                 {
                     return;
                 }
-                _lastFrameTime = now;
 
-                if (_h264Decoder == null)
-                {
-                    return;
-                }
-
-                if (!_h264Decoder.TryDecode(data, out byte[] decodedFrame, out int width, out int height))
+                Console.WriteLine($"[Decoder] 尝试解码 packetToDecode 长度={packetToDecode.Length} start={BitConverter.ToString(packetToDecode, 0, Math.Min(8, packetToDecode.Length))}");
+                if (!_h264Decoder.TryDecode(packetToDecode, out byte[] decodedFrame, out int width, out int height))
                 {
                     _unsupportedPacketCounter++;
                     if (_unsupportedPacketCounter % 120 == 0)
@@ -174,6 +204,14 @@ namespace VideoCamServer
                     }
                     return;
                 }
+                Console.WriteLine($"[Decoder] 解码成功 width={width} height={height} frameBytes={decodedFrame.Length}");
+
+                var now = DateTime.UtcNow;
+                if ((now - _lastFrameTime).TotalMilliseconds < (1000.0 / TargetFps))
+                {
+                    return;
+                }
+                _lastFrameTime = now;
 
                 FrameReady?.Invoke(decodedFrame, width, height);
 
@@ -183,6 +221,146 @@ namespace VideoCamServer
             catch (Exception ex)
             {
                 Console.WriteLine($"[Decoder Error] 解码处理失败: {ex.Message}");
+            }
+        }
+
+        private bool IsAnnexBPacket(byte[] data)
+        {
+            return data.Length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1;
+        }
+
+        private bool TryReassembleFragment(byte[] data, out byte[] nalData, out bool isFragmentPacket)
+        {
+            nalData = null;
+            isFragmentPacket = false;
+
+            if (data.Length < UdpFragmentHeaderSize) return false;
+            if (!data.Take(UdpFragmentMagic.Length).SequenceEqual(UdpFragmentMagic)) return false;
+            if (data[4] != UdpFragmentVersion) return false;
+
+            byte flags = data[5];
+            int frameId = ((data[6] & 0xFF) << 8) | (data[7] & 0xFF);
+            int nalIndex = ((data[8] & 0xFF) << 8) | (data[9] & 0xFF);
+            int fragmentIndex = ((data[10] & 0xFF) << 8) | (data[11] & 0xFF);
+            bool isStart = (flags & 0x1) != 0;
+            bool isEnd = (flags & 0x2) != 0;
+
+            Console.WriteLine($"[UDP Fragment] magic={Encoding.ASCII.GetString(data, 0, 4)} version={data[4]} frameId={frameId} nalIndex={nalIndex} fragmentIndex={fragmentIndex} start={isStart} end={isEnd} totalLen={data.Length}");
+
+            if (data.Length == UdpFragmentHeaderSize && !isStart && !isEnd)
+            {
+                return false;
+            }
+
+            isFragmentPacket = true;
+            byte[] payload = new byte[data.Length - UdpFragmentHeaderSize];
+            Array.Copy(data, UdpFragmentHeaderSize, payload, 0, payload.Length);
+
+            uint key = ((uint)frameId << 16) | (uint)nalIndex;
+            lock (_reassemblyLock)
+            {
+                CleanupStaleReassemblies();
+
+                if (!_udpNalAssemblies.TryGetValue(key, out UdpNalAssemblyState assembly))
+                {
+                    assembly = new UdpNalAssemblyState(frameId, nalIndex);
+                    _udpNalAssemblies[key] = assembly;
+                }
+
+                assembly.AddFragment(fragmentIndex, payload, isStart, isEnd);
+                if (!assembly.IsComplete())
+                {
+                    Console.WriteLine($"[UDP Fragment] 当前组包未完成 frameId={frameId} nalIndex={nalIndex} fragments={assembly.Fragments.Count}/? start={assembly.HasStart} end={assembly.HasEnd}");
+                    return false;
+                }
+
+                nalData = assembly.BuildNal();
+                Console.WriteLine($"[UDP Fragment] 组包完成 frameId={frameId} nalIndex={nalIndex} totalNalSize={nalData.Length}");
+                _udpNalAssemblies.Remove(key);
+                return true;
+            }
+        }
+
+        private void CleanupStaleReassemblies()
+        {
+            if (_udpNalAssemblies.Count == 0) return;
+            var threshold = DateTime.UtcNow.AddMilliseconds(-UdpReassemblyTimeoutMs);
+            var staleKeys = new List<uint>();
+            foreach (var pair in _udpNalAssemblies)
+            {
+                if (pair.Value.LastUpdated < threshold)
+                {
+                    staleKeys.Add(pair.Key);
+                }
+            }
+            foreach (var key in staleKeys)
+            {
+                _udpNalAssemblies.Remove(key);
+            }
+        }
+
+        private sealed class UdpNalAssemblyState
+        {
+            public int FrameId { get; }
+            public int NalIndex { get; }
+            public bool HasStart { get; private set; }
+            public bool HasEnd { get; private set; }
+            public int? ExpectedLastFragmentIndex { get; private set; }
+            public SortedDictionary<int, byte[]> Fragments { get; } = new SortedDictionary<int, byte[]>();
+            public DateTime LastUpdated { get; private set; }
+
+            public UdpNalAssemblyState(int frameId, int nalIndex)
+            {
+                FrameId = frameId;
+                NalIndex = nalIndex;
+                LastUpdated = DateTime.UtcNow;
+            }
+
+            public void AddFragment(int fragmentIndex, byte[] payload, bool isStart, bool isEnd)
+            {
+                LastUpdated = DateTime.UtcNow;
+                if (isStart) HasStart = true;
+                if (isEnd)
+                {
+                    HasEnd = true;
+                    ExpectedLastFragmentIndex = fragmentIndex;
+                }
+                if (!Fragments.ContainsKey(fragmentIndex))
+                {
+                    Fragments[fragmentIndex] = payload;
+                }
+            }
+
+            public bool IsComplete()
+            {
+                if (!HasStart || !HasEnd || !ExpectedLastFragmentIndex.HasValue) return false;
+                if (Fragments.Count != ExpectedLastFragmentIndex.Value + 1) return false;
+
+                int expected = 0;
+                foreach (var index in Fragments.Keys)
+                {
+                    if (index != expected) return false;
+                    expected++;
+                }
+                return true;
+            }
+
+            public byte[] BuildNal()
+            {
+                int totalSize = 0;
+                foreach (var payload in Fragments.Values)
+                {
+                    totalSize += payload.Length;
+                }
+
+                var nal = new byte[totalSize];
+                int offset = 0;
+                foreach (var payload in Fragments.Values)
+                {
+                    Array.Copy(payload, 0, nal, offset, payload.Length);
+                    offset += payload.Length;
+                }
+                return nal;
             }
         }
 
@@ -318,11 +496,15 @@ namespace VideoCamServer
     {
         public const int TcpPort = 9000;
         public const int UdpPort = 9001;
+        private const int UdpFragmentHeaderSize = 12;
+        private static readonly byte[] UdpFragmentMagic = new byte[] { (byte)'V', (byte)'C', (byte)'A', (byte)'M' };
+        private const byte UdpFragmentVersion = 1;
 
         private TcpListener _tcpListener;
         private UdpClient _udpClient;
         private CancellationTokenSource _cancellationTokenSource;
-
+    //private const int UdpFragmentHeaderSize = 8;
+    //        private const byte UdpFragmentVersion = 1;
         private readonly VideoProcessor _videoProcessor;
         private readonly ServerStateManager _stateManager;
 
@@ -437,7 +619,22 @@ namespace VideoCamServer
                     if (await Task.WhenAny(receiveTask, Task.Delay(-1, token)) == receiveTask)
                     {
                         var result = await receiveTask;
-                        _videoProcessor.ProcessUdpPacket(result.Buffer);
+                        var data = result.Buffer;
+
+                        if (data.Length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1)
+                        {
+                            Console.WriteLine($"[UDP] 收到 Annex-B H.264 包 from={result.RemoteEndPoint} 长度={data.Length} 头={BitConverter.ToString(data, 0, Math.Min(16, data.Length))}");
+                            _videoProcessor.ProcessUdpPacket(result.Buffer);
+                        }
+                        else if (data.Length >= UdpFragmentHeaderSize && data.Take(UdpFragmentMagic.Length).SequenceEqual(UdpFragmentMagic) && data[4] == UdpFragmentVersion)
+                        {
+                            Console.WriteLine($"[UDP] 收到 H.264 分片包 from={result.RemoteEndPoint} 长度={data.Length} 头={BitConverter.ToString(data, 0, Math.Min(16, data.Length))}");
+                            _videoProcessor.ProcessUdpPacket(result.Buffer);
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[UDP] 非标准H264包 from={result.RemoteEndPoint}，前16字节: {BitConverter.ToString(data, 0, Math.Min(16, data.Length))} 长度: {data.Length}");
+                        }
                     }
                 }
             }
