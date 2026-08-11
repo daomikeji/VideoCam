@@ -1,7 +1,14 @@
 ﻿using System;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Media.Media3D;
+using VideoCamServer.Helper;
 
 namespace VideoCamServer
 {
@@ -15,8 +22,9 @@ namespace VideoCamServer
         private const int BytesPerPixel = 4;
 
         private readonly byte[] _previewBuffer = new byte[PreviewWidth * PreviewHeight * BytesPerPixel];
-        private readonly WriteableBitmap _previewBitmap;
+        private  WriteableBitmap _previewBitmap;
         private int _frameCounter;
+        private int _isRendering = 0; // 0 = idle, 1 = rendering
 
         private ServerStateManager _stateManager;
 
@@ -35,6 +43,7 @@ namespace VideoCamServer
             VideoPreviewImage.Source = _previewBitmap;
             RenderPlaceholderFrame("等待视频流...");
             InitializeServerAndEvents();
+            
         }
 
         private void InitializeServerAndEvents()
@@ -63,6 +72,7 @@ namespace VideoCamServer
             ToggleServerButton.IsEnabled = false;
             ToggleServerButton.Background = Brushes.Gray;
             VideoStatusText.Text = "等待客户端连接...";
+           
         }
 
         // ------------------ UI 事件处理 ------------------
@@ -83,6 +93,7 @@ namespace VideoCamServer
                     ServerStatusLabel.Text = "客户端已连接";
                     ServerStatusLabel.Foreground = Brushes.Green;
                     VideoStatusText.Text = "正在接收视频流...";
+                     StartRenderLoop();
                 }
                 else
                 {
@@ -90,6 +101,7 @@ namespace VideoCamServer
                     ServerStatusLabel.Foreground = Brushes.Orange;
                     VideoStatusText.Text = "客户端断开，等待新连接...";
                     RenderPlaceholderFrame("等待新的视频流...");
+                    EndRenderLoop();
                 }
             });
         }
@@ -126,45 +138,158 @@ namespace VideoCamServer
                 VideoStatusText.Text = status;
             });
         }
+        private byte[] _latestFrame;
 
+        private readonly object _frameLock = new();
+
+        private int _videoWidth;
+        private int _videoHeight;
+        //UdpLatestBuffer buffer=null;
+        ZeroCopyFrame zeroCopyFrame = null;
+        private bool _renderStarted;
+        private void StartRenderLoop()
+        {
+            //if (_renderStarted)
+            //    return;
+
+            _renderStarted = true;
+
+            CompositionTarget.Rendering += OnRendering;
+        }
+        private DateTime _lastRender = DateTime.MinValue;
+        private static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(33); // ~30fps
+
+        private void OnRendering(object sender, EventArgs e)
+        {
+            byte[] frame = null;
+            int width;
+            int height;
+            var now = DateTime.UtcNow;
+            if (now - _lastRender < MinInterval)
+                return;
+            _lastRender = now;
+            lock (_frameLock)
+            {
+                if (zeroCopyFrame == null)
+                {
+                    return;
+                }
+                var (buffer, length) = zeroCopyFrame.GetRenderData();
+                if (buffer == null || length == 0)
+                {
+                    return;
+                }
+                //frame = new byte[length];
+                //Buffer.BlockCopy(buffer, 0, frame, 0, length);
+                //if (buffer == null)
+                //{
+                //    return;
+                //}
+                //if (buffer.TryReadLatest(out byte[] latest))
+                //{
+                //    frame = latest;
+                //}
+                //if (frame == null)
+                //    return;
+                //if (_latestFrame == null)
+                //    return;
+
+                width = _videoWidth;
+                height = _videoHeight;
+
+                //frame = (byte[])_latestFrame.Clone();
+                if (_previewBitmap == null ||
+                _previewBitmap.PixelWidth != width ||
+                _previewBitmap.PixelHeight != height)
+                {
+                    VideoPreviewImage.Source = null;
+                    _previewBitmap = new WriteableBitmap(
+                        width,
+                        height,
+                        96,
+                        96,
+                        PixelFormats.Bgra32,
+                        null);
+
+                    VideoPreviewImage.Source = _previewBitmap;
+                }
+                // _previewBitmap.WritePixels(
+                //new Int32Rect(0, 0, width, height),
+                //buffer,
+                //width * 4,
+                //0);
+                _previewBitmap.Lock();
+                // 先清空为黑色
+                unsafe
+                {
+                    var ptr = (byte*)_previewBitmap.BackBuffer;
+                    var stride = _previewBitmap.BackBufferStride;
+                    var previewBitmapHeight = _previewBitmap.PixelHeight;
+                    for (int y = 0; y < previewBitmapHeight; y++)
+                        for (int x = 0; x < stride; x++)
+                            ptr[y * stride + x] = 0;
+                }
+
+                Marshal.Copy(buffer, 0, _previewBitmap.BackBuffer, buffer.Length);
+                _previewBitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
+                _previewBitmap.Unlock();
+                zeroCopyFrame.ReadEnd();
+
+            }
+
+
+
+
+        }
+
+        private void EndRenderLoop()
+        {
+            CompositionTarget.Rendering -= OnRendering;
+            _renderStarted = false;
+            
+        }
         private void OnFrameReady(byte[] frameData, int width, int height)
         {
-            Dispatcher.Invoke(() => RenderPreviewFrame(frameData, width, height));
-        }
-
-        private void RenderPreviewFrame(byte[] data, int sourceWidth, int sourceHeight)
-        {
-            if (data == null || sourceWidth <= 0 || sourceHeight <= 0)
-            {
+            if (frameData == null)
                 return;
-            }
 
-            int sourceStride = sourceWidth * BytesPerPixel;
-            int expectedLength = sourceStride * sourceHeight;
-            if (data.Length < expectedLength)
-            {
+            if (width <= 0 || height <= 0)
                 return;
-            }
 
-            for (int y = 0; y < PreviewHeight; y++)
+            int expected = width * height * 4;
+
+            if (frameData.Length < expected)
+                return;
+
+            lock (_frameLock)
             {
-                int srcY = y * sourceHeight / PreviewHeight;
-                for (int x = 0; x < PreviewWidth; x++)
+                _videoWidth = width;
+                _videoHeight = height;
+                if (zeroCopyFrame == null || zeroCopyFrame.GetRenderData().Buffer.Length != expected)
                 {
-                    int srcX = x * sourceWidth / PreviewWidth;
-                    int srcPixel = srcY * sourceStride + srcX * BytesPerPixel;
-                    int dstPixel = (y * PreviewWidth + x) * BytesPerPixel;
-
-                    _previewBuffer[dstPixel] = data[srcPixel];
-                    _previewBuffer[dstPixel + 1] = data[srcPixel + 1];
-                    _previewBuffer[dstPixel + 2] = data[srcPixel + 2];
-                    _previewBuffer[dstPixel + 3] = 0;
+                    zeroCopyFrame = new ZeroCopyFrame(expected);
                 }
+                //if (buffer == null)
+                //{
+                //    buffer = new UdpLatestBuffer(5, expected);
+                //}
+                if (_latestFrame == null || _latestFrame.Length != expected)
+                {
+                    _latestFrame = new byte[expected];
+                }
+
+                Buffer.BlockCopy(
+                    frameData,
+                    0,
+                    _latestFrame,
+                    0,
+                    expected);
+                //buffer.Write(_latestFrame);
+                zeroCopyFrame.Push(_latestFrame);
             }
 
-            _previewBitmap.WritePixels(new Int32Rect(0, 0, PreviewWidth, PreviewHeight), _previewBuffer, PreviewWidth * BytesPerPixel, 0);
         }
-
+      
         private void RenderPlaceholderFrame(string message)
         {
             Array.Clear(_previewBuffer, 0, _previewBuffer.Length);

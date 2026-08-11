@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Windows;
+using VideoCamServer.Helper;
 using VideoCamServer.Services;
 
 namespace VideoCamServer
@@ -33,7 +34,7 @@ namespace VideoCamServer
         {
             try
             {
-                Console.WriteLine("[App] 正在初始化后台服务...");
+                LogHelper.WriteInfoLog("[App] 正在初始化后台服务...");
 
                 // 1. 初始化状态管理器
                 _stateManager = new ServerStateManager();
@@ -41,7 +42,7 @@ namespace VideoCamServer
                 // 订阅状态更新事件（可选）
                 _stateManager.StatusUpdated += status =>
                 {
-                    Console.WriteLine($"[状态更新] {status}");
+                    LogHelper.WriteInfoLog($"[状态更新] {status}");
                 };
 
                 // 2. 初始化视频处理器
@@ -58,10 +59,10 @@ namespace VideoCamServer
                 );
                 _discoveryService.StartBroadcast();
 
-                Console.WriteLine("[App] 后台服务初始化完成");
-                Console.WriteLine($"[App] TCP 端口: {NetworkListenerService.TcpPort}");
-                Console.WriteLine($"[App] UDP 端口: {NetworkListenerService.UdpPort}");
-                Console.WriteLine($"[App] 发现端口: {DiscoveryService.DiscoveryPort}");
+                LogHelper.WriteInfoLog("[App] 后台服务初始化完成");
+                LogHelper.WriteInfoLog($"[App] TCP 端口: {NetworkListenerService.TcpPort}");
+                LogHelper.WriteInfoLog($"[App] UDP 端口: {NetworkListenerService.UdpPort}");
+                LogHelper.WriteInfoLog($"[App] 发现端口: {DiscoveryService.DiscoveryPort}");
             }
             catch (Exception ex)
             {
@@ -77,13 +78,13 @@ namespace VideoCamServer
         protected override void OnExit(ExitEventArgs e)
         {
             // 清理资源
-            Console.WriteLine("[App] 正在关闭后台服务...");
+            LogHelper.WriteInfoLog("[App] 正在关闭后台服务...");
 
             _networkListener?.StopListeners();
             _discoveryService?.StopBroadcast();
             _videoProcessor?.Shutdown();
 
-            Console.WriteLine("[App] 后台服务已关闭");
+            LogHelper.WriteInfoLog("[App] 后台服务已关闭");
 
             base.OnExit(e);
         }

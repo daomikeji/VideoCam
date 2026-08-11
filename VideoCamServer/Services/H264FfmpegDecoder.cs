@@ -1,6 +1,9 @@
-using System;
-using System.Runtime.InteropServices;
 using FFmpeg.AutoGen;
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows;
+using VideoCamServer.Helper;
 
 namespace VideoCamServer.Services
 {
@@ -22,11 +25,17 @@ namespace VideoCamServer.Services
         private AVPixelFormat _lastPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
 
         private AVCodec* _codec; // 保存解码器
-
+        private static av_log_set_callback_callback _cb;
+        // 在类中添加这个属性来控制是否只解码 IDR
+        public bool _onlyDecodeIdr { get; set; } = false;
         public H264FfmpegDecoder()
         {
+            ffmpeg.RootPath = Path.Combine(Environment.CurrentDirectory, "ffmpeg");
+            DynamicallyLoadedBindings.ThrowErrorIfFunctionNotFound = true;
+            DynamicallyLoadedBindings.Initialize();
+            
             ffmpeg.av_log_set_level(ffmpeg.AV_LOG_ERROR);
-            Console.WriteLine("FFmpeg version: " + ffmpeg.av_version_info());
+            LogHelper.WriteInfoLog("FFmpeg version: " + ffmpeg.av_version_info());
 
             // 查找解码器
             _codec = ffmpeg.avcodec_find_decoder(AVCodecID.AV_CODEC_ID_H264);
@@ -66,8 +75,8 @@ namespace VideoCamServer.Services
         /// <summary>
         /// 解码器是否已经打开
         /// </summary>
-        private bool IsCodecOpen => _codecContext != null && _codecContext->codec != null;
-
+        //private bool IsCodecOpen => _codecContext != null && _codecContext->codec != null;
+        private bool IsCodecOpen=false;
         public bool TryDecode(byte[] encodedData, out byte[] bgraFrame, out int width, out int height)
         {
             bgraFrame = Array.Empty<byte>();
@@ -110,13 +119,23 @@ namespace VideoCamServer.Services
                         int openRet = ffmpeg.avcodec_open2(_codecContext, _codec, null);
                         if (openRet < 0)
                         {
-                            Console.WriteLine($"打开解码器失败: {openRet}");
+                            LogHelper.WriteInfoLog($"打开解码器失败: {openRet}");
                             return false;
                         }
-                        Console.WriteLine("H264 解码器打开成功！");
+                        IsCodecOpen = true;
+                        LogHelper.WriteInfoLog("H264 解码器打开成功！");
                     }
                     // ======================================================
+                    // ============ 新增：判断是否为 IDR 帧 ============
+                    bool isIdrFrame = IsIdrNalUnit(parsedData, parsedSize);
 
+                    // 如果设置了只解码 IDR 帧，且当前帧不是 IDR，则跳过
+                    if (_onlyDecodeIdr && !isIdrFrame)
+                    {
+                        ffmpeg.av_packet_unref(_packet);
+                        continue;
+                    }
+                    // ==================================================
                     // 发送包解码
                     ffmpeg.av_packet_unref(_packet);
                     ffmpeg.av_new_packet(_packet, parsedSize);
@@ -134,7 +153,7 @@ namespace VideoCamServer.Services
                         if (receiveRet == ffmpeg.AVERROR(ffmpeg.EAGAIN) || receiveRet == ffmpeg.AVERROR_EOF)
                             break;
                         if (receiveRet < 0) break;
-
+               
                         // 转 BGRA
                         bool ok = ConvertToBgra(_decodedFrame, out bgraFrame, out width, out height);
                         ffmpeg.av_frame_unref(_decodedFrame);
@@ -145,7 +164,72 @@ namespace VideoCamServer.Services
 
             return false;
         }
+        private bool IsIdrNalUnit(byte* data, int size)
+        {
+            // H.264 NAL 单元起始码：0x00 0x00 0x01 或 0x00 0x00 0x00 0x01
+            for (int i = 0; i < size - 4; i++)
+            {
+                // 查找起始码
+                if (data[i] == 0x00 && data[i + 1] == 0x00)
+                {
+                    if (data[i + 2] == 0x01)
+                    {
+                        // 3字节起始码：0x00 0x00 0x01
+                        byte nalType = (byte)(data[i + 3] & 0x1F);
+                        return nalType == 5; // nal_unit_type == 5 = IDR
+                    }
+                    else if (i + 3 < size && data[i + 2] == 0x00 && data[i + 3] == 0x01)
+                    {
+                        // 4字节起始码：0x00 0x00 0x00 0x01
+                        byte nalType = (byte)(data[i + 4] & 0x1F);
+                        return nalType == 5;
+                    }
+                }
+            }
+            return false;
+        }
+        private bool IsIdrFrame(byte[] data)
+        {
+            // H.264 IDR帧起始码：0x00 0x00 0x01 0x65
+            for (int i = 0; i < data.Length - 4; i++)
+            {
+                if (data[i] == 0x00 && data[i + 1] == 0x00 && data[i + 2] == 0x01)
+                {
+                    byte nalType = (byte)(data[i + 3] & 0x1F);
+                    return nalType == 5; // IDR帧
+                }
+            }
+            return false;
+        }
 
+        private bool IsValidFrame(byte[] rgba)
+        {
+            // 检测是否有大面积异常颜色
+            int badPixels = 0;
+            int total = rgba.Length / 4;
+
+            unsafe
+            {
+                fixed (byte* p = rgba)
+                {
+                    for (int i = 0; i < rgba.Length; i += 40) // 隔10个像素采样
+                    {
+                        byte r = p[i + 2];
+                        byte g = p[i + 1];
+                        byte b = p[i];
+
+                        // 检测纯绿/紫（H.264错误特征）
+                        if ((g > 220 && r < 30 && b < 30) || // 纯绿块
+                            (r > 220 && b > 220 && g < 30))   // 纯紫块
+                        {
+                            badPixels++;
+                        }
+                    }
+                }
+            }
+
+            return (double)badPixels / (total / 10) < 0.2; // 少于20%异常
+        }
         private bool ConvertToBgra(AVFrame* frame, out byte[] bgra, out int w, out int h)
         {
             bgra = Array.Empty<byte>();

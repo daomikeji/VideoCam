@@ -23,6 +23,7 @@
                         <Image x:Name="VideoPreviewImage"
                                Stretch="Uniform"
                                SnapsToDevicePixels="True"
+                             
                                RenderOptions.BitmapScalingMode="LowQuality"/>
 
                         <Border VerticalAlignment="Top"

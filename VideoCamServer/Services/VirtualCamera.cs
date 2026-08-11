@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using VideoCamServer.Helper;
 
 namespace VideoCamServer.Services
 {
@@ -51,22 +52,22 @@ namespace VideoCamServer.Services
                 if (success)
                 {
                     _isStarted = true;
-                    Console.WriteLine($"[VirtualCamera] OBS 虚拟摄像头已启动 ({Width}x{Height} @ {Fps}fps)");
+                    LogHelper.WriteInfoLog($"[VirtualCamera] OBS 虚拟摄像头已启动 ({Width}x{Height} @ {Fps}fps)");
                 }
                 else
                 {
-                    Console.WriteLine("[VirtualCamera] 警告: OBS 虚拟摄像头启动失败");
+                    LogHelper.WriteInfoLog("[VirtualCamera] 警告: OBS 虚拟摄像头启动失败");
                     _isStarted = false;
                 }
             }
             catch (DllNotFoundException)
             {
-                Console.WriteLine("[VirtualCamera] 错误: 找不到 obs-virtualsource.dll，请确保已正确安装 OBS Virtual Camera");
+                LogHelper.WriteInfoLog("[VirtualCamera] 错误: 找不到 obs-virtualsource.dll，请确保已正确安装 OBS Virtual Camera");
                 _isStarted = false;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[VirtualCamera] 错误: 初始化失败 - {ex.Message}");
+                LogHelper.WriteInfoLog($"[VirtualCamera] 错误: 初始化失败 - {ex.Message}");
                 _isStarted = false;
             }
         }
@@ -128,7 +129,7 @@ namespace VideoCamServer.Services
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[VirtualCamera] 错误: 推送帧失败 - {ex.Message}");
+                    LogHelper.WriteExceptionLog($"[VirtualCamera] 错误: 推送帧失败 - {ex.Message}");
                 }
             }
         }
@@ -145,13 +146,13 @@ namespace VideoCamServer.Services
                 if (_isStarted)
                 {
                     OBSVirtualCameraInterop.obs_virtual_cam_stop();
-                    Console.WriteLine("[VirtualCamera] OBS 虚拟摄像头已停止");
+                    LogHelper.WriteInfoLog("[VirtualCamera] OBS 虚拟摄像头已停止");
                     _isStarted = false;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[VirtualCamera] 警告: 关闭虚拟摄像头时出错 - {ex.Message}");
+                LogHelper.WriteExceptionLog($"[VirtualCamera] 警告: 关闭虚拟摄像头时出错 - {ex.Message}");
             }
         }
 

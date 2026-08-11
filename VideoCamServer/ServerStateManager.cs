@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using VideoCamServer.Services;
+using VideoCamServer.Helper;
 
 namespace VideoCamServer
 {
@@ -113,7 +114,7 @@ namespace VideoCamServer
         private const int UdpFragmentHeaderSize = 12;
         private static readonly byte[] UdpFragmentMagic = new byte[] { (byte)'V', (byte)'C', (byte)'A', (byte)'M' };
         private const byte UdpFragmentVersion = 1;
-        private const int UdpReassemblyTimeoutMs = 3000;
+        private const int UdpReassemblyTimeoutMs = 30000; // increase timeout to allow slow fragment arrival
 
         private readonly object _reassemblyLock = new object();
         private readonly Dictionary<uint, UdpNalAssemblyState> _udpNalAssemblies = new Dictionary<uint, UdpNalAssemblyState>();
@@ -125,17 +126,18 @@ namespace VideoCamServer
 
         private void InitializeDecoder()
         {
-            Console.WriteLine("[Decoder] 正在初始化 H.264 解码器...");
+            LogHelper.WriteInfoLog("[Decoder] 正在初始化 H.264 解码器...");
             try
             {
                 _h264Decoder = new H264FfmpegDecoder();
+                _h264Decoder._onlyDecodeIdr = true;
                 _ffmpegDecoderContext = new IntPtr(1);
-                Console.WriteLine("[Decoder] 解码器初始化完成。");
+                LogHelper.WriteInfoLog("[Decoder] 解码器初始化完成。");
             }
             catch (Exception ex)
             {
                 _ffmpegDecoderContext = IntPtr.Zero;
-                Console.WriteLine($"[Decoder] 初始化失败: {ex.Message}");
+                LogHelper.WriteExceptionLog($"[Decoder] 初始化失败: {ex.Message}\n{ex}");
             }
         }
 
@@ -184,7 +186,7 @@ namespace VideoCamServer
                     _unsupportedPacketCounter++;
                     if (_unsupportedPacketCounter % 120 == 0)
                     {
-                        Console.WriteLine("[Decoder] 收到非标准 UDP 包，忽略数据。等待 H.264 包或自定义分片包。");
+                        LogHelper.WriteInfoLog("[Decoder] 收到非标准 UDP 包，忽略数据。等待 H.264 包或自定义分片包。");
                     }
                     return;
                 }
@@ -194,17 +196,17 @@ namespace VideoCamServer
                     return;
                 }
 
-                Console.WriteLine($"[Decoder] 尝试解码 packetToDecode 长度={packetToDecode.Length} start={BitConverter.ToString(packetToDecode, 0, Math.Min(8, packetToDecode.Length))}");
+                LogHelper.WriteInfoLog($"[Decoder] 尝试解码 packetToDecode 长度={packetToDecode.Length} start={BitConverter.ToString(packetToDecode, 0, Math.Min(8, packetToDecode.Length))}");
                 if (!_h264Decoder.TryDecode(packetToDecode, out byte[] decodedFrame, out int width, out int height))
                 {
                     _unsupportedPacketCounter++;
                     if (_unsupportedPacketCounter % 120 == 0)
                     {
-                        Console.WriteLine("[Decoder] 当前 UDP 包未形成可解码帧，等待更多 H.264 数据...");
+                        LogHelper.WriteInfoLog("[Decoder] 当前 UDP 包未形成可解码帧，等待更多 H.264 数据...");
                     }
                     return;
                 }
-                Console.WriteLine($"[Decoder] 解码成功 width={width} height={height} frameBytes={decodedFrame.Length}");
+                LogHelper.WriteInfoLog($"[Decoder] 解码成功 width={width} height={height} frameBytes={decodedFrame.Length}");
 
                 var now = DateTime.UtcNow;
                 if ((now - _lastFrameTime).TotalMilliseconds < (1000.0 / TargetFps))
@@ -220,7 +222,7 @@ namespace VideoCamServer
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Decoder Error] 解码处理失败: {ex.Message}");
+                LogHelper.WriteExceptionLog($"[Decoder Error] 解码处理失败: {ex.Message}\n{ex}");
             }
         }
 
@@ -245,7 +247,7 @@ namespace VideoCamServer
             bool isStart = (flags & 0x1) != 0;
             bool isEnd = (flags & 0x2) != 0;
 
-            Console.WriteLine($"[UDP Fragment] magic={Encoding.ASCII.GetString(data, 0, 4)} version={data[4]} frameId={frameId} nalIndex={nalIndex} fragmentIndex={fragmentIndex} start={isStart} end={isEnd} totalLen={data.Length}");
+            LogHelper.WriteInfoLog($"[UDP Fragment] magic={Encoding.ASCII.GetString(data, 0, 4)} version={data[4]} frameId={frameId} nalIndex={nalIndex} fragmentIndex={fragmentIndex} start={isStart} end={isEnd} totalLen={data.Length}");
 
             if (data.Length == UdpFragmentHeaderSize && !isStart && !isEnd)
             {
@@ -265,17 +267,18 @@ namespace VideoCamServer
                 {
                     assembly = new UdpNalAssemblyState(frameId, nalIndex);
                     _udpNalAssemblies[key] = assembly;
+                    LogHelper.WriteInfoLog($"[UDP Fragment] 创建新组包 state frameId={frameId} nalIndex={nalIndex}");
                 }
 
                 assembly.AddFragment(fragmentIndex, payload, isStart, isEnd);
                 if (!assembly.IsComplete())
                 {
-                    Console.WriteLine($"[UDP Fragment] 当前组包未完成 frameId={frameId} nalIndex={nalIndex} fragments={assembly.Fragments.Count}/? start={assembly.HasStart} end={assembly.HasEnd}");
+                    LogHelper.WriteInfoLog($"[UDP Fragment] 当前组包未完成 frameId={frameId} nalIndex={nalIndex} fragments={assembly.Fragments.Count}/? start={assembly.HasStart} end={assembly.HasEnd}");
                     return false;
                 }
 
                 nalData = assembly.BuildNal();
-                Console.WriteLine($"[UDP Fragment] 组包完成 frameId={frameId} nalIndex={nalIndex} totalNalSize={nalData.Length}");
+                LogHelper.WriteInfoLog($"[UDP Fragment] 组包完成 frameId={frameId} nalIndex={nalIndex} totalNalSize={nalData.Length}");
                 _udpNalAssemblies.Remove(key);
                 return true;
             }
@@ -291,10 +294,15 @@ namespace VideoCamServer
                 if (pair.Value.LastUpdated < threshold)
                 {
                     staleKeys.Add(pair.Key);
+                    LogHelper.WriteInfoLog($"[UDP Fragment Cleanup] 标记过期组包 frameId={pair.Value.FrameId} nalIndex={pair.Value.NalIndex} lastUpdated={pair.Value.LastUpdated}");
                 }
             }
             foreach (var key in staleKeys)
             {
+                if (_udpNalAssemblies.TryGetValue(key, out var removed))
+                {
+                    LogHelper.WriteInfoLog($"[UDP Fragment Cleanup] 移除过期组包 frameId={removed.FrameId} nalIndex={removed.NalIndex}");
+                }
                 _udpNalAssemblies.Remove(key);
             }
         }
@@ -319,9 +327,14 @@ namespace VideoCamServer
             public void AddFragment(int fragmentIndex, byte[] payload, bool isStart, bool isEnd)
             {
                 LastUpdated = DateTime.UtcNow;
-                if (isStart) HasStart = true;
+                if (isStart)
+                {
+                    if (!HasStart) LogHelper.WriteInfoLog($"[UDP Fragment State] 收到 Start fragment for frameId={FrameId} nalIndex={NalIndex} index={fragmentIndex}");
+                    HasStart = true;
+                }
                 if (isEnd)
                 {
+                    if (!HasEnd) LogHelper.WriteInfoLog($"[UDP Fragment State] 收到 End fragment for frameId={FrameId} nalIndex={NalIndex} index={fragmentIndex}");
                     HasEnd = true;
                     ExpectedLastFragmentIndex = fragmentIndex;
                 }
@@ -368,7 +381,7 @@ namespace VideoCamServer
         {
             if (_ffmpegDecoderContext != IntPtr.Zero)
             {
-                Console.WriteLine("[Decoder] 正在关闭解码器并释放资源...");
+                LogHelper.WriteInfoLog("[Decoder] 正在关闭解码器并释放资源...");
                 _h264Decoder?.Dispose();
                 _h264Decoder = null;
                 _ffmpegDecoderContext = IntPtr.Zero;
@@ -406,7 +419,7 @@ namespace VideoCamServer
         public void StartBroadcast()
         {
             Task.Run(() => BroadcastLoopAsync(_cancellationTokenSource.Token));
-            Console.WriteLine($"[Discovery] 发现服务已启动在端口: {DiscoveryPort}");
+            LogHelper.WriteInfoLog($"[Discovery] 发现服务已启动在端口: {DiscoveryPort}");
         }
 
         private async Task BroadcastLoopAsync(CancellationToken token)
@@ -452,7 +465,7 @@ namespace VideoCamServer
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[Discovery Error] 广播失败: {ex.Message}");
+                    LogHelper.WriteExceptionLog($"[Discovery Error] 广播失败: {ex.Message}");
                 }
 
                 await Task.Delay(2000, token);
@@ -517,13 +530,13 @@ namespace VideoCamServer
 
         public void StartListeners()
         {
-            Console.WriteLine("[NetService] 启动网络监听服务...");
+            LogHelper.WriteInfoLog("[NetService] 启动网络监听服务...");
 
             Task.Run(() => StartTcpListenerAsync(_cancellationTokenSource.Token));
             Task.Run(() => StartUdpReceiverAsync(_cancellationTokenSource.Token));
 
-            Console.WriteLine($"[NetService] TCP 监听已启动在端口: {TcpPort}");
-            Console.WriteLine($"[NetService] UDP 接收已启动在端口: {UdpPort}");
+            LogHelper.WriteInfoLog($"[NetService] TCP 监听已启动在端口: {TcpPort}");
+            LogHelper.WriteInfoLog($"[NetService] UDP 接收已启动在端口: {UdpPort}");
         }
 
         private async Task StartTcpListenerAsync(CancellationToken token)
@@ -542,13 +555,13 @@ namespace VideoCamServer
                         var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString();
                         _stateManager.UpdateClientIp(remoteIp);
                         _stateManager.IsClientConnected = true; // 更新连接状态
-                        Console.WriteLine($"[TCP] 客户端已连接: {remoteIp}");
+                        LogHelper.WriteInfoLog($"[TCP] 客户端已连接: {remoteIp}");
                         _ = HandleTcpClientAsync(client, token);
                     }
                 }
             }
-            catch (OperationCanceledException) { Console.WriteLine("[TCP] 监听服务已取消。"); }
-            catch (Exception ex) { Console.WriteLine($"[TCP] 发生错误: {ex.Message}"); }
+            catch (OperationCanceledException) { LogHelper.WriteExceptionLog("[TCP] 监听服务已取消。"); }
+            catch (Exception ex) { LogHelper.WriteExceptionLog($"[TCP] 发生错误: {ex.Message}"); }
         }
 
         private async Task HandleTcpClientAsync(TcpClient client, CancellationToken token)
@@ -565,7 +578,7 @@ namespace VideoCamServer
                         if (bytesRead == 0) break; // 客户端断开连接
 
                         string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
-                        Console.WriteLine($"[TCP 接收] 收到控制命令: {message}");
+                        LogHelper.WriteInfoLog($"[TCP 接收] 收到控制命令: {message}");
 
                         // 解析并处理控制命令
                         ProcessControlCommand(message);
@@ -577,13 +590,13 @@ namespace VideoCamServer
                     }
                 }
                 catch (OperationCanceledException) { /* 正常取消 */ }
-                catch (Exception ex) { Console.WriteLine($"[TCP 处理] 客户端连接中断或发生错误: {ex.Message}"); }
+                catch (Exception ex) { LogHelper.WriteExceptionLog($"[TCP 处理] 客户端连接中断或发生错误: {ex.Message}"); }
                 finally
                 {
                     _stateManager.IsClientConnected = false; // 更新断开状态
                 }
             }
-            Console.WriteLine($"[TCP] 客户端断开连接。");
+            LogHelper.WriteInfoLog($"[TCP] 客户端断开连接。");
         }
 
         /// <summary>
@@ -623,30 +636,30 @@ namespace VideoCamServer
 
                         if (data.Length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1)
                         {
-                            Console.WriteLine($"[UDP] 收到 Annex-B H.264 包 from={result.RemoteEndPoint} 长度={data.Length} 头={BitConverter.ToString(data, 0, Math.Min(16, data.Length))}");
+                            LogHelper.WriteInfoLog($"[UDP] 收到 Annex-B H.264 包 from={result.RemoteEndPoint} 长度={data.Length} 头={BitConverter.ToString(data, 0, Math.Min(16, data.Length))}");
                             _videoProcessor.ProcessUdpPacket(result.Buffer);
                         }
                         else if (data.Length >= UdpFragmentHeaderSize && data.Take(UdpFragmentMagic.Length).SequenceEqual(UdpFragmentMagic) && data[4] == UdpFragmentVersion)
                         {
-                            Console.WriteLine($"[UDP] 收到 H.264 分片包 from={result.RemoteEndPoint} 长度={data.Length} 头={BitConverter.ToString(data, 0, Math.Min(16, data.Length))}");
+                            LogHelper.WriteInfoLog($"[UDP] 收到 H.264 分片包 from={result.RemoteEndPoint} 长度={data.Length} 头={BitConverter.ToString(data, 0, Math.Min(16, data.Length))}");
                             _videoProcessor.ProcessUdpPacket(result.Buffer);
                         }
                         else
                         {
-                            Console.WriteLine($"[UDP] 非标准H264包 from={result.RemoteEndPoint}，前16字节: {BitConverter.ToString(data, 0, Math.Min(16, data.Length))} 长度: {data.Length}");
+                            LogHelper.WriteInfoLog($"[UDP] 非标准H264包 from={result.RemoteEndPoint}，前16字节: {BitConverter.ToString(data, 0, Math.Min(16, data.Length))} 长度: {data.Length}");
                         }
                     }
                 }
             }
-            catch (SocketException ex) when (ex.ErrorCode == 10004) { Console.WriteLine("[UDP] 监听服务已关闭。"); }
-            catch (OperationCanceledException) { Console.WriteLine("[UDP] 监听服务已取消。"); }
-            catch (Exception ex) { Console.WriteLine($"[UDP] 发生错误: {ex.Message}"); }
+            catch (SocketException ex) when (ex.ErrorCode == 10004) { LogHelper.WriteExceptionLog("[UDP] 监听服务已关闭。"); }
+            catch (OperationCanceledException) { LogHelper.WriteExceptionLog("[UDP] 监听服务已取消。"); }
+            catch (Exception ex) { LogHelper.WriteExceptionLog($"[UDP] 发生错误: {ex.Message}"); }
             finally { _udpClient?.Close(); }
         }
 
         public void StopListeners()
         {
-            Console.WriteLine("[NetService] 正在停止网络监听服务...");
+            LogHelper.WriteInfoLog("[NetService] 正在停止网络监听服务...");
             _cancellationTokenSource.Cancel();
             _tcpListener?.Stop();
             // 确保 UdpClient 释放端口
@@ -655,7 +668,7 @@ namespace VideoCamServer
                 _udpClient.Close();
                 _udpClient.Dispose();
             }
-            Console.WriteLine("[NetService] 网络监听服务已停止。");
+            LogHelper.WriteInfoLog("[NetService] 网络监听服务已停止。");
         }
     }
 
@@ -692,7 +705,7 @@ namespace VideoCamServer
             {
                 // 模拟 WPF Log 窗口更新
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"[WPF Log] 状态更新: {status}");
+                LogHelper.WriteInfoLog($"[WPF Log] 状态更新: {status}");
                 Console.ResetColor();
             };
 
@@ -700,7 +713,7 @@ namespace VideoCamServer
             {
                 // 模拟 WPF 连接状态指示灯更新
                 Console.ForegroundColor = isConnected ? ConsoleColor.Green : ConsoleColor.Red;
-                Console.WriteLine($"[WPF UI] 连接状态指示灯: {(isConnected ? "🟢 ONLINE" : "🔴 OFFLINE")}");
+                LogHelper.WriteInfoLog($"[WPF UI] 连接状态指示灯: {(isConnected ? "🟢 ONLINE" : "🔴 OFFLINE")}");
                 Console.ResetColor();
                 // 模拟启用/禁用控制面板
             };
@@ -727,23 +740,23 @@ namespace VideoCamServer
             // Console.ReadKey();
 
             // 5. 清理
-            Console.WriteLine("\n[程序退出] 正在停止所有服务...");
+            LogHelper.WriteInfoLog("\n[程序退出] 正在停止所有服务...");
             listener.StopListeners();
             discoveryService.StopBroadcast();
             videoProcessor.Shutdown();
-            Console.WriteLine("[程序退出] 程序退出。");
+            LogHelper.WriteInfoLog("[程序退出] 程序退出。");
         }
 
         private static void DisplayInitialUiState()
         {
-            Console.WriteLine("\n==============================================");
-            Console.WriteLine($"   iVCam 桌面端服务器 (WPF 后台) 状态");
-            Console.WriteLine("==============================================");
-            Console.WriteLine($" - 视频处理端口 (UDP): {NetworkListenerService.UdpPort}");
-            Console.WriteLine($" - 控制信令端口 (TCP): {NetworkListenerService.TcpPort}");
-            Console.WriteLine($" - 发现广播端口 (UDP): {DiscoveryService.DiscoveryPort}");
-            Console.WriteLine("==============================================");
-            Console.WriteLine("WPF UI 正在等待连接...");
+            LogHelper.WriteInfoLog("\n==============================================");
+            LogHelper.WriteInfoLog($"   iVCam 桌面端服务器 (WPF 后台) 状态");
+            LogHelper.WriteInfoLog("==============================================");
+            LogHelper.WriteInfoLog($" - 视频处理端口 (UDP): {NetworkListenerService.UdpPort}");
+            LogHelper.WriteInfoLog($" - 控制信令端口 (TCP): {NetworkListenerService.TcpPort}");
+            LogHelper.WriteInfoLog($" - 发现广播端口 (UDP): {DiscoveryService.DiscoveryPort}");
+            LogHelper.WriteInfoLog("==============================================");
+            LogHelper.WriteInfoLog("WPF UI 正在等待连接...");
         }
 
         private static void OnFrameReady(byte[] frameData, int width, int height)
@@ -764,7 +777,7 @@ namespace VideoCamServer
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[P/Invoke Error] 调用 C++ 函数时发生错误: {ex.Message}");
+                LogHelper.WriteExceptionLog($"[P/Invoke Error] 调用 C++ 函数时发生错误: {ex.Message}");
             }
             finally
             {

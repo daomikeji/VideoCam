@@ -801,7 +801,13 @@ Log.d(TAG, "packet received len=${packet.length} from=${packet.address.hostAddre
             var fragmentIndex = 0
             while (offset < nal.size) {
                 val chunkSize = min(payloadMax, nal.size - offset)
-                val flags = ((if (offset == 0) 0x1 else 0) or (if (offset + chunkSize >= nal.size) 0x2 else 0)).toByte()
+                var  flags=0.toByte()
+                if (offset == 0){
+                    flags =0x1.toByte()
+                }else if (offset + chunkSize >= nal.size){
+                    flags=0x2.toByte()
+                }
+                //val flags = ((if (offset == 0) 0x1 else 0) or (if (offset + chunkSize >= nal.size) 0x2 else 0)).toByte()
                 val header = createUdpFragmentHeader(flags, frameId, nalIndex, fragmentIndex)
                 val packetData = ByteArray(header.size + chunkSize)
                 System.arraycopy(header, 0, packetData, 0, header.size)
